@@ -1,0 +1,13 @@
+{
+  "name": "doc-bot",
+  "version": "1.0.0",
+  "description": "Headless Dragons of Camelot Bot",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "puppeteer": "^22.0.0"
+  }
+}
