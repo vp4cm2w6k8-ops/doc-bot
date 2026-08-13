@@ -5,9 +5,18 @@ const app = express();
 app.use(express.json());
 const PORT = process.env.PORT || 10000;
 
+// --- URL SANITIZER ---
+function sanitizeUrl(rawUrl) {
+    let url = (rawUrl || 'https://www.dragonsofcamelot.com').trim();
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = 'https://' + url;
+    }
+    return url;
+}
+
 // --- CONFIGURATION ---
 const CONFIG = {
-    gameUrl: process.env.GAME_URL || 'https://www.dragonsofcamelot.com',
+    gameUrl: sanitizeUrl(process.env.GAME_URL),
     username: process.env.GAME_USER || 'YOUR_EMAIL@EXAMPLE.COM',
     password: process.env.GAME_PASSWORD || 'YOUR_PASSWORD',
     pollIntervalMs: 15000
@@ -155,7 +164,7 @@ async function getGameFrame(page) {
             const hasSeed = await frame.evaluate(() => typeof window.seed !== 'undefined' || typeof window.Modal !== 'undefined');
             if (hasSeed) return frame;
         } catch (e) {
-            // Ignore cross-origin frame errors
+            // Ignore cross-origin frame access restriction errors
         }
     }
     return null;
@@ -230,6 +239,8 @@ async function executeUpgrade(frame, item) {
 // --- AUTOMATION ENGINE ---
 async function startQueueBot() {
     console.log('[BOT] Launching Headless Browser Engine...');
+    console.log(`[BOT] Target URL set to: ${CONFIG.gameUrl}`);
+    
     const browser = await puppeteer.launch({
         headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
