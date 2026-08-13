@@ -352,7 +352,6 @@ async function performLogin(page) {
   try {
     const emailSelector = 'input[type="email"], input[name="email"], input[name="username"], #email';
     const passwordSelector = 'input[type="password"], input[name="password"], #password';
-    const submitSelector = 'button[type="submit"], input[type="submit"], .login-btn, #login_button';
 
     // Wait for form inputs to render
     await page.waitForSelector(emailSelector, { timeout: 15000 });
@@ -361,13 +360,16 @@ async function performLogin(page) {
     await page.type(emailSelector, email);
     await page.type(passwordSelector, password);
 
-    console.log('[BOT] Submitting login form...');
+    console.log('[BOT] Submitting login credentials via Enter key...');
     
-    // Click submit and wait for navigation
+    // Press Enter to submit the form directly from the password field
     await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
-      page.click(submitSelector)
+      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null),
+      page.keyboard.press('Enter')
     ]);
+
+    // Brief pause to allow JavaScript redirects to process
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
     console.log(`[BOT] Login submitted. Current URL: ${page.url()}`);
 
