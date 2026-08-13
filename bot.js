@@ -1,143 +1,115 @@
 /**
- * Dragons of Camelot - Multi-City Queue Engine
+ * Dragons of Camelot - Render Node.js Bot Core
  */
-(function () {
-  'use strict';
+const puppeteer = require('puppeteer');
 
-  // State tracker for queue processing
-  const QueueEngine = {
-    pollIntervalMs: 5000, // Check queue state every 5 seconds
-    pendingBuilds: [],   // Managed build targets: { location: 'Water', name: 'Camp', targetLevel: 10 }
-    intervalId: null
-  };
+// Config and State
+const POLL_INTERVAL_MS = 5000;
+let pendingBuilds = [
+  // Example queued targets:
+  // { location: 'Water', name: 'Camp', targetLevel: 10 }
+];
 
-  /**
-   * 1. DOM SCRAPER & PARSER
-   */
-  function getActiveConstructionQueue() {
-    const container = document.querySelector('.constructionItemList');
-    if (!container) return [];
+/**
+ * Browser-side function to scrape the DOM.
+ * Executed inside Puppeteer's page context.
+ */
+function scrapeActiveConstructionQueue() {
+  const container = document.querySelector('.constructionItemList');
+  if (!container) return [];
 
-    const items = container.querySelectorAll('.constructionItem');
-    const activeQueue = [];
+  const items = container.querySelectorAll('.constructionItem');
+  const activeQueue = [];
 
-    items.forEach((item) => {
-      const nameEl = item.querySelector('.itemName');
-      const quantityEl = item.querySelector('.itemQuantity');
-      const timerEl = item.querySelector('#timer');
-      const locationEl = item.querySelector('.buildTimerLocation');
-      const speedUpEl = item.querySelector('.speedUpIcon');
-      const progressBar = item.querySelector('#time-left');
+  items.forEach((item) => {
+    const nameEl = item.querySelector('.itemName');
+    const quantityEl = item.querySelector('.itemQuantity');
+    const timerEl = item.querySelector('#timer');
+    const locationEl = item.querySelector('.buildTimerLocation');
+    const speedUpEl = item.querySelector('.speedUpIcon');
+    const progressBar = item.querySelector('#time-left');
 
-      // Isolate duration string by cloning and dropping location span
-      let rawTimeText = '';
-      if (timerEl) {
-        const clone = timerEl.cloneNode(true);
-        const locSpan = clone.querySelector('.buildTimerLocation');
-        if (locSpan) locSpan.remove();
-        rawTimeText = clone.textContent.replace(/Time Left:\s*/i, '').trim();
-      }
+    let rawTimeText = '';
+    if (timerEl) {
+      const clone = timerEl.cloneNode(true);
+      const locSpan = clone.querySelector('.buildTimerLocation');
+      if (locSpan) locSpan.remove();
+      rawTimeText = clone.textContent.replace(/Time Left:\s*/i, '').trim();
+    }
 
-      activeQueue.push({
-        name: nameEl ? nameEl.textContent.trim() : 'Unknown',
-        level: quantityEl ? parseInt(quantityEl.textContent.trim(), 10) : 0,
-        location: locationEl ? locationEl.textContent.trim() : 'Main',
-        timeLeft: rawTimeText,
-        timeLeftSeconds: parseTimeToSeconds(rawTimeText),
-        speedUpType: speedUpEl ? speedUpEl.getAttribute('data-speedup-type') : null,
-        progressPercent: progressBar ? parseFloat(progressBar.style.width) : 0
-      });
+    activeQueue.push({
+      name: nameEl ? nameEl.textContent.trim() : 'Unknown',
+      level: quantityEl ? parseInt(quantityEl.textContent.trim(), 10) : 0,
+      location: locationEl ? locationEl.textContent.trim() : 'Main',
+      timeLeft: rawTimeText,
+      speedUpType: speedUpEl ? speedUpEl.getAttribute('data-speedup-type') : null,
+      progressPercent: progressBar ? parseFloat(progressBar.style.width) : 0
     });
+  });
 
-    return activeQueue;
-  }
+  return activeQueue;
+}
 
-  /**
-   * Helper: Converts "38h 12m 51s" format to seconds
-   */
-  function parseTimeToSeconds(timeStr) {
-    if (!timeStr) return 0;
-    let totalSeconds = 0;
-    const h = timeStr.match(/(\d+)\s*h/i);
-    const m = timeStr.match(/(\d+)\s*m/i);
-    const s = timeStr.match(/(\d+)\s*s/i);
+/**
+ * Checks if a specific location is currently building
+ */
+function isCityBusy(activeQueue, locationName) {
+  return activeQueue.some(
+    (item) => item.location.toLowerCase() === locationName.toLowerCase()
+  );
+}
 
-    if (h) totalSeconds += parseInt(h[1], 10) * 3600;
-    if (m) totalSeconds += parseInt(m[1], 10) * 60;
-    if (s) totalSeconds += parseInt(s[1], 10);
+/**
+ * Main Puppeteer Bot Runner
+ */
+async function startBot() {
+  console.log('[BOT] Launching headless browser...');
+  
+  const browser = await puppeteer.launch({
+    headless: 'new',
+    args: ['--no-sandbox', '--disable-setuid-sandbox'] // Required for Render environments
+  });
 
-    return totalSeconds;
-  }
+  const page = await browser.newPage();
 
-  /**
-   * 2. CITY STATUS CHECKERS
-   */
-  function isCityBusy(activeQueue, locationName) {
-    return activeQueue.some(
-      (item) => item.location.toLowerCase() === locationName.toLowerCase()
-    );
-  }
+  // 1. Navigate and Hook Game Context
+  console.log('[BOT] Navigating to game...');
+  await page.goto('https://www.dragonsofcamelot.com/Great.html', { waitUntil: 'networkidle2' });
 
-  /**
-   * 3. BUILD EXECUTION HANDLER
-   * Triggers the build action in-game when a queue slot becomes available
-   */
-  function executeBuildCommand(buildTask) {
-    console.log(`[BOT] Starting build: ${buildTask.name} Lvl ${buildTask.targetLevel} in ${buildTask.location}`);
-    
-    // Example: Dispatching build request or clicking UI target element
-    // Switch to city iframe context or fire game API call:
-    // Modal/API execution logic goes here...
-  }
+  // 2. Queue Engine Polling Loop
+  setInterval(async () => {
+    try {
+      // Evaluate DOM scraper directly inside browser page
+      const activeQueue = await page.evaluate(scrapeActiveConstructionQueue);
+      console.log(`[BOT] Active jobs running: ${activeQueue.length}`, activeQueue);
 
-  /**
-   * 4. MAIN QUEUE POLLING LOOP
-   */
-  function processQueueLoop() {
-    const activeQueue = getActiveConstructionQueue();
-    console.log(`[BOT] Active jobs running: ${activeQueue.length}`, activeQueue);
+      // Process pending queue against active busy cities
+      for (let i = pendingBuilds.length - 1; i >= 0; i--) {
+        const task = pendingBuilds[i];
 
-    // Filter pending targets against currently busy cities
-    for (let i = QueueEngine.pendingBuilds.length - 1; i >= 0; i--) {
-      const task = QueueEngine.pendingBuilds[i];
+        if (!isCityBusy(activeQueue, task.location)) {
+          console.log(`[BOT] Open slot detected in ${task.location}! Dispatching build: ${task.name}`);
+          
+          // Execute trigger in page context if slot open
+          await page.evaluate((buildTask) => {
+            console.log(`[Browser Context] Starting build for ${buildTask.name} in ${buildTask.location}`);
+            // Fire in-game build click or API call here
+          }, task);
 
-      if (!isCityBusy(activeQueue, task.location)) {
-        console.log(`[BOT] Open construction slot detected in ${task.location}!`);
-        executeBuildCommand(task);
-        
-        // Remove task from pending queue after launching
-        QueueEngine.pendingBuilds.splice(i, 1);
-      } else {
-        console.log(`[BOT] ${task.location} is currently busy. Waiting for slot to free up.`);
+          // Remove completed task assignment
+          pendingBuilds.splice(i, 1);
+        } else {
+          console.log(`[BOT] ${task.location} is busy. Waiting...`);
+        }
       }
+    } catch (err) {
+      console.error('[BOT] Error during queue polling cycle:', err.message);
     }
-  }
+  }, POLL_INTERVAL_MS);
+}
 
-  /**
-   * 5. INITIALIZATION & PUBLIC CONTROLS
-   */
-  window.QueueManager = {
-    start: function () {
-      if (QueueEngine.intervalId) return;
-      console.log('[BOT] Starting Multi-City Queue Engine polling...');
-      QueueEngine.intervalId = setInterval(processQueueLoop, QueueEngine.pollIntervalMs);
-    },
-    stop: function () {
-      if (QueueEngine.intervalId) {
-        clearInterval(QueueEngine.intervalId);
-        QueueEngine.intervalId = null;
-        console.log('[BOT] Queue Engine stopped.');
-      }
-    },
-    addBuildTask: function (location, name, targetLevel) {
-      QueueEngine.pendingBuilds.push({ location, name, targetLevel });
-      console.log(`[BOT] Added target to queue: ${name} (Level ${targetLevel}) in ${location}`);
-    },
-    getActiveStatus: function () {
-      return getActiveConstructionQueue();
-    }
-  };
-
-  // Auto-start polling engine
-  window.QueueManager.start();
-})();
+// Start Node.js service
+startBot().catch((err) => {
+  console.error('[BOT] Fatal startup error:', err);
+  process.exit(1);
+});
