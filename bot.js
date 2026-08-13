@@ -347,39 +347,50 @@ async function performLogin(page) {
     return false;
   }
 
-  console.log('[BOT] Executing login on index.html...');
+  console.log('[BOT] Executing login flow on index.html...');
 
   try {
-    const emailSelector = 'input[type="email"], input[name="email"], input[name="username"], #email';
-    const passwordSelector = 'input[type="password"], input[name="password"], #password';
-
-    // Wait for form inputs to render
-    await page.waitForSelector(emailSelector, { timeout: 15000 });
+    // 1. Open the Login Modal popover
+    const modalTriggerSelector = 'button[popovertarget="login-modal-wrapper"], button.login-button';
+    await page.waitForSelector(modalTriggerSelector, { timeout: 10000 });
     
-    // Type credentials
-    await page.type(emailSelector, email);
-    await page.type(passwordSelector, password);
+    console.log('[BOT] Clicking landing page Login button to open modal...');
+    await page.click(modalTriggerSelector);
 
-    console.log('[BOT] Submitting login credentials via Enter key...');
+    // 2. Wait for login modal input fields to enter the DOM
+    const emailSelector = '#login-email';
+    const passwordSelector = '#login-password';
+    const submitBtnSelector = '#pain1';
+
+    await page.waitForSelector(emailSelector, { visible: true, timeout: 10000 });
+
+    // Focus and type credentials
+    console.log('[BOT] Modal opened. Entering credentials...');
+    await page.click(emailSelector);
+    await page.type(emailSelector, email, { delay: 50 });
+
+    await page.click(passwordSelector);
+    await page.type(passwordSelector, password, { delay: 50 });
+
+    // 3. Submit the Login form
+    console.log('[BOT] Submitting login form (#pain1)...');
     
-    // Press Enter to submit the form directly from the password field
+    // Promise.all ensures we capture the form navigation/POST response cleanly
     await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null),
-      page.keyboard.press('Enter')
+      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {}),
+      page.click(submitBtnSelector)
     ]);
 
-    // Brief pause to allow JavaScript redirects to process
+    console.log(`[BOT] Current URL post-auth submit: ${page.url()}`);
+
+    // 4. Launch game session at Great.html
+    console.log('[BOT] Navigating to Great.html to start game session...');
+    await page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 90000 });
+
     await new Promise(resolve => setTimeout(resolve, 3000));
+    console.log(`[BOT] Final URL after game launch attempt: ${page.url()}`);
 
-    console.log(`[BOT] Login submitted. Current URL: ${page.url()}`);
-
-    // If login didn't auto-redirect to Great.html, navigate there manually
-    if (!page.url().includes('Great.html')) {
-      console.log('[BOT] Post-login redirect pending. Navigating to Great.html directly...');
-      await page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 90000 });
-    }
-
-    return true;
+    return !page.url().includes('index.html');
   } catch (err) {
     console.error('[BOT ERROR] Failed during form login sequence:', err.message);
     return false;
