@@ -1,3 +1,42 @@
+Ah, got it! That city selection bar gives us the complete, definitive list of outposts in the game interface. Good catch on Hades—`hades01`-`10` were likely just event/temporary slots from the Hades Counter Attack panel rather than a full outpost.
+
+### Key Details Scraped from `.city-select`:
+
+1. **Complete City List:**
+* `Home` (Main)
+* `Water`
+* `Soul`
+* `Abyssal`
+* `Chronos`
+* `Stone`
+* `Ice`
+* `Tempest`
+* `Skythrone`
+* `Lava`
+* `Sunken`
+* `Steelshard`
+* `Wind`
+* `Gaia`
+* `Luna`
+* `Solarian`
+* `Lost`
+
+
+2. **Useful Status Classes for Bot Automation:**
+* `city-owned`: Filters out outposts you haven't unlocked/built yet.
+* `empire-status-selected`: Identifies which city tab is currently open.
+* `empire-building-busy`: Tells the bot if construction is already active without needing to scrape slots!
+* `empire-training-busy`: Tracks active troop/unit training queues.
+
+
+
+---
+
+### Updated `bot.js`
+
+Here is the updated script reflecting the full outpost roster and replacing "Hades" with the accurate cities:
+
+```javascript
 /**
  * Dragons of Camelot - Headless Bot & Control Panel
  * Target Environment: Node.js (Render Web Service)
@@ -22,8 +61,27 @@ const state = {
   pendingBuilds: []
 };
 
-// Game Options for Control Panel Dropdowns
-const CITIES = ['Main', 'Spectral', 'Water', 'Lava', 'Stone', 'Chronos', 'Ice', 'Sunken', 'Wind', 'Gaia'];
+// Full list of Cities/Outposts from the .city-select DOM element
+const CITIES = [
+  'Main',
+  'Water',
+  'Soul',
+  'Abyssal',
+  'Chronos',
+  'Stone',
+  'Ice',
+  'Tempest',
+  'Skythrone',
+  'Lava',
+  'Sunken',
+  'Steelshard',
+  'Wind',
+  'Gaia',
+  'Luna',
+  'Solarian',
+  'Lost'
+];
+
 const BUILDINGS = [
   'Barracks',
   'House',
@@ -42,7 +100,10 @@ const BUILDINGS = [
   'Wall',
   'Portal',
   'Mausoleum',
-  'Spectral Keep'
+  'Spectral Keep',
+  'Silo',
+  'Stone Dragon Keep',
+  'Lava Dragon Keep'
 ];
 
 // Map image filenames to human-readable building names
@@ -50,6 +111,8 @@ const IMAGE_MAP = {
   'barracks': 'Barracks',
   'house': 'House',
   'adultdragon': 'Dragon Keep',
+  'adultstonedragon': 'Stone Dragon Keep',
+  'adultlavadragon': 'Lava Dragon Keep',
   'rally': 'Rally Point',
   'theater': 'Theater',
   'mstore': 'Storehouse',
@@ -62,6 +125,9 @@ const IMAGE_MAP = {
   'portal': 'Portal',
   'maus': 'Mausoleum',
   'spec': 'Spectral Keep',
+  'silo': 'Silo',
+  'camp': 'Camp',
+  'waterhouse': 'House',
   'building': 'Under Construction'
 };
 
@@ -142,9 +208,9 @@ app.get('/', (req, res) => {
             <div style="margin-top:15px;">
               <span style="font-size:0.8em; color:#888;">Quick Presets:</span>
               <div class="presets">
-                <a href="/add?location=Spectral&name=Mausoleum&targetLevel=10"><button class="preset-btn">+ Spectral Mausoleum Lvl 10</button></a>
-                <a href="/add?location=Water&name=Barracks&targetLevel=10"><button class="preset-btn">+ Water Barracks Lvl 10</button></a>
-                <a href="/add?location=Main&name=House&targetLevel=11"><button class="preset-btn">+ Main House Lvl 11</button></a>
+                <a href="/add?location=Stone&name=Silo&targetLevel=10"><button class="preset-btn">+ Stone Silo Lvl 10</button></a>
+                <a href="/add?location=Lava&name=Camp&targetLevel=10"><button class="preset-btn">+ Lava Camp Lvl 10</button></a>
+                <a href="/add?location=Soul&name=Mausoleum&targetLevel=10"><button class="preset-btn">+ Soul Mausoleum Lvl 10</button></a>
               </div>
             </div>
           </div>
@@ -213,6 +279,32 @@ app.listen(PORT, '0.0.0.0', () => {
 // 2. BROWSER DOM SCRAPERS
 // ==========================================
 
+function scrapeCityStates() {
+  const container = document.querySelector('.city-select');
+  if (!container) return [];
+
+  const buttons = container.querySelectorAll('button');
+  const cities = [];
+
+  buttons.forEach((btn) => {
+    const id = btn.id; // e.g. WaterCity, StoneCity
+    const isOwned = btn.classList.contains('city-owned');
+    const isSelected = btn.classList.contains('empire-status-selected');
+    const isBuildingBusy = btn.classList.contains('empire-building-busy');
+    const isTrainingBusy = btn.classList.contains('empire-training-busy');
+
+    cities.push({
+      id,
+      isOwned,
+      isSelected,
+      isBuildingBusy,
+      isTrainingBusy
+    });
+  });
+
+  return cities;
+}
+
 function scrapeCitySlots(imageMap) {
   const slots = document.querySelectorAll('button.buildingSlot');
   const cityState = [];
@@ -253,13 +345,13 @@ function scrapeCitySlots(imageMap) {
 
 async function getGameFrame(page) {
   try {
-    const mainHasBtn = await page.evaluate(() => !!(document.querySelector('.buildingSlot') || document.querySelector('#OpenBar')));
+    const mainHasBtn = await page.evaluate(() => !!(document.querySelector('.buildingSlot') || document.querySelector('.city-select')));
     if (mainHasBtn) return page;
   } catch (e) {}
 
   for (const frame of page.frames()) {
     try {
-      const frameHasBtn = await frame.evaluate(() => !!(document.querySelector('.buildingSlot') || document.querySelector('#OpenBar')));
+      const frameHasBtn = await frame.evaluate(() => !!(document.querySelector('.buildingSlot') || document.querySelector('.city-select')));
       if (frameHasBtn) return frame;
     } catch (e) {}
   }
@@ -279,19 +371,27 @@ async function processQueueLoop() {
     const targetContext = await getGameFrame(state.page);
 
     if (!targetContext) {
-      console.log('[BOT] Searching frame tree for city slots / #OpenBar...');
+      console.log('[BOT] Searching frame tree for city slots / .city-select...');
       return;
     }
 
+    const cityOverview = await targetContext.evaluate(scrapeCityStates);
     const slotsData = await targetContext.evaluate(scrapeCitySlots, IMAGE_MAP);
 
-    if (!slotsData || slotsData.length === 0) {
-      console.log('[BOT] City DOM slots not fully loaded yet...');
-      return;
+    if (cityOverview.length > 0) {
+      const owned = cityOverview.filter(c => c.isOwned).map(c => c.id.replace('City', ''));
+      const activeBuildingCities = cityOverview.filter(c => c.isBuildingBusy).map(c => c.id.replace('City', ''));
+      
+      console.log(`[BOT] Owned Cities (${owned.length}): ${owned.join(', ')}`);
+      if (activeBuildingCities.length > 0) {
+        console.log(`[BOT] Cities with active construction: ${activeBuildingCities.join(', ')}`);
+      }
     }
 
-    const activeUpgrades = slotsData.filter(s => s.isBuilding);
-    console.log(`[BOT] Scanned ${slotsData.length} slots. Active construction in progress: ${activeUpgrades.length}`);
+    if (slotsData && slotsData.length > 0) {
+      const activeUpgrades = slotsData.filter(s => s.isBuilding);
+      console.log(`[BOT] Scanned current city view (${slotsData.length} slots). Upgrades active in this view: ${activeUpgrades.length}`);
+    }
 
   } catch (err) {
     console.error('[BOT] Polling error:', err.message);
@@ -339,3 +439,5 @@ initializeBot().catch((err) => {
   console.error('[BOT] Startup error:', err);
   process.exit(1);
 });
+
+```
