@@ -93,41 +93,35 @@ async function startBot() {
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
 
-    try {
-        console.log('[HEADLESS BOT] Navigating to game site...');
-        await page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2' });
+   if (await page.$(usernameSelector)) {
+            console.log('[HEADLESS BOT] Executing login sequence...');
+            await page.type(usernameSelector, CONFIG.username, { delay: 50 });
+            await page.type(passwordSelector, CONFIG.password, { delay: 50 });
+            
+            // Direct DOM click to bypass headless clickability checks
+            await page.evaluate((btnSel) => {
+                const btn = document.querySelector(btnSel);
+                if (btn) {
+                    btn.scrollIntoView();
+                    btn.click();
+                }
+            }, loginBtnSelector);
 
-        // Automated Login Check
-        const usernameSelector = '#username, #email, input[name="email"]';
-        const passwordSelector = '#password, input[name="password"]';
-        const loginBtnSelector = '#loginBtn, button[type="submit"], input[type="submit"]';
+            console.log('[HEADLESS BOT] Submitted credentials, waiting for game UI to load...');
 
-        if (await page.$(usernameSelector)) {
-    console.log('[HEADLESS BOT] Executing login sequence...');
-    await page.type(usernameSelector, CONFIG.username, { delay: 50 });
-    await page.type(passwordSelector, CONFIG.password, { delay: 50 });
-    
-    // Direct DOM click to bypass headless clickability checks
-    const clicked = await page.evaluate((btnSel) => {
-        const btn = document.querySelector(btnSel);
-        if (btn) {
-            btn.scrollIntoView();
-            btn.click();
-            return true;
+            // Wait for SPA elements to appear instead of waiting for full page navigation
+            try {
+                await page.waitForSelector('#openBookmarksBtn, .map-container, #main_game_frame', { 
+                    visible: true, 
+                    timeout: 60000 
+                });
+                console.log('[HEADLESS BOT] Authentication completed & Game UI loaded successfully!');
+            } catch (e) {
+                console.warn('[HEADLESS BOT WARNING] Timed out waiting for UI selector. Attempting to proceed...');
+            }
+        } else {
+            console.log('[HEADLESS BOT] Session already active / No login inputs detected.');
         }
-        return false;
-    }, loginBtnSelector);
-
-    if (clicked) {
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {
-            console.log('[HEADLESS BOT] Navigation wait timed out, continuing execution...');
-        });
-    } else {
-        console.warn('[HEADLESS BOT] Login button element not found in DOM.');
-    }
-
-    console.log('[HEADLESS BOT] Authentication phase complete.');
-}
 
         // Wait for main UI
         await page.waitForSelector('#openBookmarksBtn, .map-container', { timeout: 60000 });
