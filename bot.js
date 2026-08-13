@@ -248,7 +248,7 @@ function scrapeCityStates() {
   const cities = [];
 
   buttons.forEach((btn) => {
-    const id = btn.id; // e.g. WaterCity, StoneCity
+    const id = btn.id;
     const isOwned = btn.classList.contains('city-owned');
     const isSelected = btn.classList.contains('empire-status-selected');
     const isBuildingBusy = btn.classList.contains('empire-building-busy');
@@ -305,18 +305,30 @@ function scrapeCitySlots(imageMap) {
 // ==========================================
 
 async function getGameFrame(page) {
+  const frames = page.frames();
+
+  // Check main page context
   try {
-    const mainHasBtn = await page.evaluate(() => !!(document.querySelector('.buildingSlot') || document.querySelector('.city-select')));
+    const mainHasBtn = await page.evaluate(() => 
+      !!(document.querySelector('.buildingSlot') || document.querySelector('.city-select'))
+    );
     if (mainHasBtn) return page;
   } catch (e) {}
 
-  for (const frame of page.frames()) {
+  // Check child frames
+  for (const frame of frames) {
     try {
-      const frameHasBtn = await frame.evaluate(() => !!(document.querySelector('.buildingSlot') || document.querySelector('.city-select')));
-      if (frameHasBtn) return frame;
+      const frameHasBtn = await frame.evaluate(() => 
+        !!(document.querySelector('.buildingSlot') || document.querySelector('.city-select'))
+      );
+      if (frameHasBtn) {
+        return frame;
+      }
     } catch (e) {}
   }
 
+  // Debug logging: show total frame count if not found yet
+  console.log(`[BOT] Searching frame tree (${frames.length} frames detected)...`);
   return null;
 }
 
@@ -332,7 +344,6 @@ async function processQueueLoop() {
     const targetContext = await getGameFrame(state.page);
 
     if (!targetContext) {
-      console.log('[BOT] Searching frame tree for city slots / .city-select...');
       return;
     }
 
@@ -387,7 +398,9 @@ async function initializeBot() {
   );
 
   console.log('[BOT] Navigating to game...');
-  await state.page.goto(CONFIG.gameUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  
+  // Network idle ensures resources like game frames finish loading
+  await state.page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 90000 });
 
   console.log('[BOT] Game context hooked successfully!');
   console.log('[BOT] Entering main queue polling loop...');
