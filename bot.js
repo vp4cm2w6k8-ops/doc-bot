@@ -1,42 +1,3 @@
-Ah, got it! That city selection bar gives us the complete, definitive list of outposts in the game interface. Good catch on Hades—`hades01`-`10` were likely just event/temporary slots from the Hades Counter Attack panel rather than a full outpost.
-
-### Key Details Scraped from `.city-select`:
-
-1. **Complete City List:**
-* `Home` (Main)
-* `Water`
-* `Soul`
-* `Abyssal`
-* `Chronos`
-* `Stone`
-* `Ice`
-* `Tempest`
-* `Skythrone`
-* `Lava`
-* `Sunken`
-* `Steelshard`
-* `Wind`
-* `Gaia`
-* `Luna`
-* `Solarian`
-* `Lost`
-
-
-2. **Useful Status Classes for Bot Automation:**
-* `city-owned`: Filters out outposts you haven't unlocked/built yet.
-* `empire-status-selected`: Identifies which city tab is currently open.
-* `empire-building-busy`: Tells the bot if construction is already active without needing to scrape slots!
-* `empire-training-busy`: Tracks active troop/unit training queues.
-
-
-
----
-
-### Updated `bot.js`
-
-Here is the updated script reflecting the full outpost roster and replacing "Hades" with the accurate cities:
-
-```javascript
 /**
  * Dragons of Camelot - Headless Bot & Control Panel
  * Target Environment: Node.js (Render Web Service)
@@ -439,5 +400,3 @@ initializeBot().catch((err) => {
   console.error('[BOT] Startup error:', err);
   process.exit(1);
 });
-
-```
