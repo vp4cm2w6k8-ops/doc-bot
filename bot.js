@@ -1,317 +1,252 @@
-const express = require('express');
 const puppeteer = require('puppeteer');
+const express = require('express');
 
-// ============================================================================
-// 1. HTTP HEALTH CHECK SERVER FOR RENDER
-// ============================================================================
 const app = express();
+app.use(express.json());
 const PORT = process.env.PORT || 10000;
 
-app.get('/', (req, res) => {
-    res.send('Dragons of Camelot Headless Bot is Active.');
-});
+// IN-MEMORY QUEUE DATA STORE
+let queuePlan = [
+    { id: 1, type: 'building', name: 'Academy', level: 5 },
+    { id: 2, type: 'building', name: 'Cottage', level: 8 },
+    { id: 3, type: 'research', name: 'Dragon Breeding', level: 3 }
+];
 
-app.listen(PORT, () => {
-    console.log(`[HTTP SERVER] Health endpoint listening on port ${PORT}`);
-});
-
-// ============================================================================
-// 2. CONFIGURATION & CONSTANTS
-// ============================================================================
-const CONFIG = {
-    // Game Credentials (Update or use environment variables)
-    gameUrl: process.env.GAME_URL || 'https://www.dragonsofcamelot.com',
-    username: process.env.BOT_USERNAME || 'YOUR_USERNAME_OR_EMAIL',
-    password: process.env.BOT_PASSWORD || 'YOUR_PASSWORD',
-
-    // Runtime Safety
-    maxRuntimeMs: 4 * 60 * 60 * 1000, // 4 Hours safety limit per session
-
-    // Target Lists
-    DRAGON_NAMES: ['GreatDragon', 'LavaDragon', 'StoneDragon'] // Omits WaterDragon
+let activeStatus = {
+    buildingQueue: 'Idle',
+    researchQueue: 'Idle',
+    lastCheck: 'Starting up...'
 };
 
-const startTime = Date.now();
-let waveCounter = 0;
-let currentTargetIndex = 0;
+// --- WEB DASHBOARD UI ---
+app.get('/', (req, res) => {
+    res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Dragons of Camelot - Queue Controller</title>
+        <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #121212; color: #e0e0e0; margin: 0; padding: 20px; }
+            .container { max-width: 600px; margin: 0 auto; background: #1e1e1e; padding: 20px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+            h2 { text-align: center; color: #4caf50; margin-bottom: 20px; }
+            .status-box { background: #2a2a2a; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #4caf50; }
+            .form-group { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+            select, input, button { padding: 10px; border-radius: 6px; border: 1px solid #333; background: #2c2c2c; color: #fff; font-size: 14px; }
+            select { flex: 2; }
+            input[type="number"] { width: 70px; }
+            button { background: #4caf50; color: white; font-weight: bold; border: none; cursor: pointer; flex: 1; min-width: 100px; }
+            button:hover { background: #45a049; }
+            .queue-list { list-style: none; padding: 0; }
+            .queue-item { display: flex; justify-content: space-between; align-items: center; background: #2a2a2a; margin-bottom: 8px; padding: 10px 14px; border-radius: 6px; }
+            .queue-item.research { border-left: 4px solid #2196f3; }
+            .queue-item.building { border-left: 4px solid #ff9800; }
+            .btn-del { background: #f44336; padding: 6px 10px; font-size: 12px; min-width: auto; }
+            .tag { font-size: 10px; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; background: #444; margin-right: 8px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h2>Queue Control Center</h2>
+            <div class="status-box">
+                <div><strong>Building Queue:</strong> <span id="bStatus">Loading...</span></div>
+                <div><strong>Research Queue:</strong> <span id="rStatus">Loading...</span></div>
+                <div style="font-size: 12px; color: #888; margin-top: 4px;">Last check: <span id="lastCheck">-</span></div>
+            </div>
 
-// ============================================================================
-// 3. HELPER FUNCTIONS
-// ============================================================================
-function getJitterDelay(baseDelay) {
-    const variance = baseDelay * 0.20;
-    const min = baseDelay - variance;
-    const max = baseDelay + variance;
-    return Math.floor(Math.random() * (max - min) + min);
-}
+            <div class="form-group">
+                <select id="qType">
+                    <option value="building">Building Upgrade</option>
+                    <option value="research">Research Tech</option>
+                </select>
+                <input type="text" id="qName" placeholder="Name (e.g., Academy)" style="flex:2;" />
+                <input type="number" id="qLevel" placeholder="Lvl" value="1" min="1" max="25" />
+                <button onclick="addItem()">Add to Queue</button>
+            </div>
 
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
+            <h3>Upcoming Upgrades</h3>
+            <ul id="queueList" class="queue-list"></ul>
+        </div>
 
-function calculateSSD(targetText, level) {
-    const isCamp = /anthropus/i.test(targetText);
+        <script>
+            async function loadData() {
+                const res = await fetch('/api/state');
+                const data = await res.json();
+                document.getElementById('bStatus').innerText = data.status.buildingQueue;
+                document.getElementById('rStatus').innerText = data.status.researchQueue;
+                document.getElementById('lastCheck').innerText = data.status.lastCheck;
 
-    if (isCamp) {
-        if (level === 1 || level === 2) return 200;
-        if (level === 3) return 600;
-        if (level === 4) return 1250;
-        if (level >= 5) return 3500;
-        return 3500;
-    } else {
-        if (level >= 1 && level <= 3) return 200;
-        if (level === 4) return 250;
-        if (level === 5 || level === 6) return 600;
-        if (level === 7) return 1000;
-        if (level === 8 || level === 9) return 1700;
-        if (level >= 10) return 7500;
-        return 600;
-    }
-}
+                const list = document.getElementById('queueList');
+                list.innerHTML = '';
+                data.queue.forEach((item, index) => {
+                    list.innerHTML += \`
+                        <li class="queue-item \${item.type}">
+                            <div>
+                                <span class="tag">\${item.type}</span>
+                                <strong>\${item.name}</strong> (Target Lvl \${item.level})
+                            </div>
+                            <button class="btn-del" onclick="removeItem(\${item.id})">Delete</button>
+                        </li>
+                    \`;
+                });
+            }
 
-// ============================================================================
-// 4. MAIN ENGINE
-// ============================================================================
-async function startBot() {
-    console.log('[HEADLESS BOT] Launching browser engine...');
-    
-    // Server-container optimized Chrome launch arguments
+            async function addItem() {
+                const type = document.getElementById('qType').value;
+                const name = document.getElementById('qName').value.trim();
+                const level = parseInt(document.getElementById('qLevel').value);
+                if (!name) return alert('Please enter a name');
+
+                await fetch('/api/queue', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type, name, level })
+                });
+                document.getElementById('qName').value = '';
+                loadData();
+            }
+
+            async function removeItem(id) {
+                await fetch('/api/queue/' + id, { method: 'DELETE' });
+                loadData();
+            }
+
+            setInterval(loadData, 5000);
+            loadData();
+        </script>
+    </body>
+    </html>
+    `);
+});
+
+// --- API ENDPOINTS FOR THE UI ---
+app.get('/api/state', (req, res) => res.json({ queue: queuePlan, status: activeStatus }));
+
+app.post('/api/queue', (req, res) => {
+    const { type, name, level } = req.body;
+    const newItem = { id: Date.now(), type, name, level: parseInt(level) };
+    queuePlan.push(newItem);
+    res.json({ success: true, item: newItem });
+});
+
+app.delete('/api/queue/:id', (req, res) => {
+    const id = parseInt(req.params.id);
+    queuePlan = queuePlan.filter(item => item.id !== id);
+    res.json({ success: true });
+});
+
+app.listen(PORT, () => console.log(`[HTTP SERVER] Control Dashboard live on port ${PORT}`));
+
+// --- HEADLESS AUTOMATION ENGINE ---
+const CONFIG = {
+    gameUrl: process.env.GAME_URL || 'https://www.facebook.com/dragonsofcamelot',
+    username: process.env.GAME_USER || 'YOUR_USERNAME',
+    password: process.env.GAME_PASSWORD || 'YOUR_PASSWORD',
+    pollIntervalMs: 15000
+};
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function startQueueBot() {
+    console.log('[BOT] Launching Headless Browser Engine...');
     const browser = await puppeteer.launch({
         headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process',
-            '--disable-gpu'
-        ]
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
     });
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
 
-   if (await page.$(usernameSelector)) {
-            console.log('[HEADLESS BOT] Executing login sequence...');
-            await page.type(usernameSelector, CONFIG.username, { delay: 50 });
-            await page.type(passwordSelector, CONFIG.password, { delay: 50 });
-            
-            // Direct DOM click to bypass headless clickability checks
-            await page.evaluate((btnSel) => {
-                const btn = document.querySelector(btnSel);
-                if (btn) {
-                    btn.scrollIntoView();
-                    btn.click();
-                }
-            }, loginBtnSelector);
+    try {
+        console.log('[BOT] Navigating to game portal...');
+        await page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2' });
 
-            console.log('[HEADLESS BOT] Submitted credentials, waiting for game UI to load...');
-
-            // Wait for SPA elements to appear instead of waiting for full page navigation
-            try {
-                await page.waitForSelector('#openBookmarksBtn, .map-container, #main_game_frame', { 
-                    visible: true, 
-                    timeout: 60000 
-                });
-                console.log('[HEADLESS BOT] Authentication completed & Game UI loaded successfully!');
-            } catch (e) {
-                console.warn('[HEADLESS BOT WARNING] Timed out waiting for UI selector. Attempting to proceed...');
-            }
-        } else {
-            console.log('[HEADLESS BOT] Session already active / No login inputs detected.');
-        }
-
-        // Wait for main UI
-        await page.waitForSelector('#openBookmarksBtn, .map-container', { timeout: 60000 });
-        console.log('[HEADLESS BOT] Game state confirmed ready.');
-
-        // Main Execution Loop
-        while (Date.now() - startTime < CONFIG.maxRuntimeMs) {
-            await executeLoopStep(page);
-            await sleep(getJitterDelay(1200));
-        }
-
-        console.log('[HEADLESS BOT] Maximum runtime elapsed. Shutting down session.');
-
-    } catch (err) {
-        console.error('[HEADLESS BOT ERROR]', err);
-    } finally {
-        await browser.close();
-    }
-}
-
-// ============================================================================
-// 5. LOOP ACTIONS
-// ============================================================================
-async function executeLoopStep(page) {
-    // Check general status
-    const busyGeneral = await page.evaluate(() => {
-        const disabledGeneralOption = document.querySelector('#generalSelectorContainer .general-option.disabled');
-        if (disabledGeneralOption && disabledGeneralOption.textContent.toLowerCase().includes('all generals are busy')) {
-            return true;
-        }
-        const optionNames = document.querySelectorAll('.general-option-name');
-        for (const span of optionNames) {
-            if (span.textContent.toLowerCase().includes('all generals are busy')) return true;
-        }
-        return false;
-    });
-
-    if (busyGeneral) {
-        console.log('[GENERALS BUSY] All generals active. Waiting 15s...');
-        await page.evaluate(() => {
-            const closeBtn = document.querySelector('#closeAttackMenu, .close-button, .modal-close');
-            if (closeBtn) closeBtn.click();
-        });
-        await sleep(15000);
-        return;
-    }
-
-    // Check if Attack Dialog is open
-    const isAttackDialogOpen = await page.evaluate(() => {
-        const btn = document.querySelector('#attackButton');
-        return btn && btn.style.display !== 'none';
-    });
-
-    if (isAttackDialogOpen) {
-        const targetData = await page.evaluate((calcFnString) => {
-            const nameEl = document.querySelector('#attackInfoName');
-            if (!nameEl) return null;
-
-            const targetText = nameEl.textContent.trim();
-            const match = targetText.match(/\d+/);
-            if (!match) return null;
-
-            const level = parseInt(match[0], 10);
-            const isCamp = /anthropus/i.test(targetText);
-            
-            const calcFunc = new Function('targetText', 'level', calcFnString);
-            const requiredSSD = calcFunc(targetText, level);
-
-            return { name: targetText, level, isCamp, requiredSSD };
-        }, calculateSSD.toString().replace(/^function calculateSSD\(targetText, level\) \{|\}$/g, ''));
-
-        if (!targetData) return;
-
-        const targetSSD = targetData.requiredSSD;
-        console.log(`[TARGET MATCH] ${targetData.name} | Lvl ${targetData.level} | Needs: ${targetSSD} SSD`);
-
-        const availableTroops = await page.evaluate(() => {
-            const wrapper = document.querySelector('.troop-card-wrapper[data-unit-name="SwiftStrikeDragon"]');
-            return wrapper ? parseInt(wrapper.getAttribute('data-max-count'), 10) || 0 : 0;
-        });
-
-        if (availableTroops < targetSSD) {
-            console.warn(`[RESOURCES LOW] ${availableTroops}/${targetSSD} SSD available. Cycling target...`);
-            currentTargetIndex++;
+        // Authenticate
+        const userSel = '#username, #email, input[name="email"]';
+        if (await page.$(userSel)) {
+            await page.type(userSel, CONFIG.username, { delay: 50 });
+            await page.type('#password, input[name="password"]', CONFIG.password, { delay: 50 });
             await page.evaluate(() => {
-                const closeBtn = document.querySelector('#closeAttackMenu, .close-button, .modal-close');
-                if (closeBtn) closeBtn.click();
+                const btn = document.querySelector('#loginBtn, button[type="submit"], input[type="submit"]');
+                if (btn) btn.click();
             });
-            await sleep(getJitterDelay(400));
-            return;
+            await sleep(10000);
         }
 
-        // Fill Troop Input
-        await page.evaluate((ssdCount) => {
-            const wrapper = document.querySelector('.troop-card-wrapper[data-unit-name="SwiftStrikeDragon"]');
-            if (wrapper) {
-                const input = wrapper.querySelector('.troop-input');
-                if (input) {
-                    input.focus();
-                    input.value = ssdCount.toString();
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                    input.dispatchEvent(new Event('change', { bubbles: true }));
-                    input.blur();
-                }
-            }
-        }, targetSSD);
+        console.log('[BOT] Game state active. Worker cycle initiated.');
 
-        // Select Dragon for Wilderness
-        if (!targetData.isCamp) {
-            await page.evaluate((dragonList) => {
-                for (const name of dragonList) {
-                    const card = document.querySelector(`.troop-card-wrapper[data-unit-name="${name}"]`);
-                    if (card) {
-                        const count = parseInt(card.getAttribute('data-max-count'), 10) || 0;
-                        if (count > 0) {
-                            const input = card.querySelector('.troop-input');
-                            if (input) {
-                                input.focus();
-                                input.value = "1";
-                                input.dispatchEvent(new Event('input', { bubbles: true }));
-                                input.dispatchEvent(new Event('change', { bubbles: true }));
-                                input.blur();
-                                break;
-                            }
-                        }
+        while (true) {
+            activeStatus.lastCheck = new Date().toLocaleTimeString();
+
+            // Evaluate building slot
+            const buildingBusy = await checkSlotBusy(page, 'building');
+            activeStatus.buildingQueue = buildingBusy ? 'Busy (Upgrading)' : 'Idle';
+
+            if (!buildingBusy) {
+                const nextBuilding = queuePlan.find(item => item.type === 'building');
+                if (nextBuilding) {
+                    console.log(`[BOT] Triggering building: ${nextBuilding.name} Lvl ${nextBuilding.level}`);
+                    const success = await executeUpgrade(page, nextBuilding);
+                    if (success) {
+                        queuePlan = queuePlan.filter(i => i.id !== nextBuilding.id);
+                        activeStatus.buildingQueue = 'Started Upgrade!';
                     }
                 }
-            }, CONFIG.DRAGON_NAMES);
-        }
+            }
 
-        await sleep(getJitterDelay(300));
+            // Evaluate research slot
+            const researchBusy = await checkSlotBusy(page, 'research');
+            activeStatus.researchQueue = researchBusy ? 'Busy (Researching)' : 'Idle';
 
-        // Dispatch March
-        await page.evaluate(() => {
-            const dispatchBtn = document.querySelector('#attackButton');
-            if (dispatchBtn) dispatchBtn.click();
-        });
-
-        waveCounter++;
-        currentTargetIndex++;
-        console.log(`[DISPATCH SUCCESS] Wave #${waveCounter} dispatched!`);
-
-        // Anti-Detection Pause Logic
-        const wavesBeforeBreak = Math.floor(Math.random() * (22 - 12 + 1)) + 12;
-        if (waveCounter % wavesBeforeBreak === 0) {
-            const breakTime = Math.floor(Math.random() * (15000 - 8000 + 1)) + 8000;
-            console.log(`[SIMULATED BREAK] Pausing for ${(breakTime / 1000).toFixed(1)}s...`);
-            await sleep(breakTime);
-        }
-
-    } else {
-        // Target selection sequence
-        await page.evaluate(() => {
-            const openBookBtn = document.querySelector('#openBookmarksBtn');
-            if (openBookBtn) openBookBtn.click();
-        });
-
-        await sleep(getJitterDelay(400));
-
-        const targetClicked = await page.evaluate((targetIdx) => {
-            const rows = document.querySelectorAll('.tile-bookmark-row, tr[class*="bookmark"], div[class*="bookmark-row"]');
-            if (rows.length === 0) return false;
-
-            const rowIndex = targetIdx % rows.length;
-            const targetRow = rows[rowIndex];
-
-            if (targetRow) {
-                const goBtn = Array.from(targetRow.querySelectorAll('button, a, input[type="button"]'))
-                    .find(el => el.textContent.trim().toLowerCase() === 'go');
-
-                if (goBtn) {
-                    goBtn.click();
-                    return true;
+            if (!researchBusy) {
+                const nextResearch = queuePlan.find(item => item.type === 'research');
+                if (nextResearch) {
+                    console.log(`[BOT] Triggering research: ${nextResearch.name} Lvl ${nextResearch.level}`);
+                    const success = await executeUpgrade(page, nextResearch);
+                    if (success) {
+                        queuePlan = queuePlan.filter(i => i.id !== nextResearch.id);
+                        activeStatus.researchQueue = 'Started Research!';
+                    }
                 }
             }
-            return false;
-        }, currentTargetIndex);
 
-        if (targetClicked) {
-            await sleep(getJitterDelay(500));
-            await page.evaluate(() => {
-                const mapAttackBtn = document.querySelector('button[onclick="attack()"]');
-                if (mapAttackBtn) mapAttackBtn.click();
-            });
-            await sleep(getJitterDelay(500));
-        } else {
-            currentTargetIndex++;
+            await sleep(CONFIG.pollIntervalMs);
         }
+    } catch (err) {
+        console.error('[BOT ERROR]', err);
     }
 }
 
-// Start execution
-startBot();
+async function checkSlotBusy(page, type) {
+    return await page.evaluate((qType) => {
+        const selector = qType === 'building' 
+            ? '.mod_building_queue, #pb_building, .construction-timer' 
+            : '.mod_research_queue, #pb_research, .academy-timer';
+        const el = document.querySelector(selector);
+        return el && el.offsetHeight > 0 && el.innerText.includes(':');
+    }, type);
+}
+
+async function executeUpgrade(page, item) {
+    return await page.evaluate((target) => {
+        try {
+            const elements = Array.from(document.querySelectorAll('.buildingTile, .researchTile, .modal-item'));
+            const match = elements.find(el => el.innerText.toLowerCase().includes(target.name.toLowerCase()));
+            if (!match) return false;
+            match.click();
+
+            setTimeout(() => {
+                const upgradeBtn = document.querySelector('.btn_upgrade, .btn_research, button.action-upgrade');
+                if (upgradeBtn && !upgradeBtn.classList.contains('disabled')) {
+                    upgradeBtn.click();
+                }
+            }, 1000);
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }, item);
+}
+
+startQueueBot();
