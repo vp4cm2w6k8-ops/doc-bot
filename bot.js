@@ -103,13 +103,31 @@ async function startBot() {
         const loginBtnSelector = '#loginBtn, button[type="submit"], input[type="submit"]';
 
         if (await page.$(usernameSelector)) {
-            console.log('[HEADLESS BOT] Executing login sequence...');
-            await page.type(usernameSelector, CONFIG.username, { delay: 50 });
-            await page.type(passwordSelector, CONFIG.password, { delay: 50 });
-            await page.click(loginBtnSelector);
-            await page.waitForNavigation({ waitUntil: 'networkidle2' });
-            console.log('[HEADLESS BOT] Authentication completed.');
+    console.log('[HEADLESS BOT] Executing login sequence...');
+    await page.type(usernameSelector, CONFIG.username, { delay: 50 });
+    await page.type(passwordSelector, CONFIG.password, { delay: 50 });
+    
+    // Direct DOM click to bypass headless clickability checks
+    const clicked = await page.evaluate((btnSel) => {
+        const btn = document.querySelector(btnSel);
+        if (btn) {
+            btn.scrollIntoView();
+            btn.click();
+            return true;
         }
+        return false;
+    }, loginBtnSelector);
+
+    if (clicked) {
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {
+            console.log('[HEADLESS BOT] Navigation wait timed out, continuing execution...');
+        });
+    } else {
+        console.warn('[HEADLESS BOT] Login button element not found in DOM.');
+    }
+
+    console.log('[HEADLESS BOT] Authentication phase complete.');
+}
 
         // Wait for main UI
         await page.waitForSelector('#openBookmarksBtn, .map-container', { timeout: 60000 });
