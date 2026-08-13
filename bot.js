@@ -20,7 +20,9 @@ const state = {
   browser: null,
   page: null,
   isProcessing: false,
-  pendingBuilds: []
+  pendingBuilds: [],
+  activeBuilds: [], // Track active upgrades in game slots
+  activeCity: 'Unknown'
 };
 
 // Full list of Cities/Outposts from the .city-select DOM element
@@ -70,6 +72,7 @@ const app = express();
 app.use(express.json());
 
 app.get('/', (req, res) => {
+  // Pending queue rows
   const pendingRows = state.pendingBuilds.length === 0
     ? `<tr><td colspan="5" style="text-align:center; padding:15px; color:#888;">No pending builds scheduled</td></tr>`
     : state.pendingBuilds.map((b, i) => `
@@ -81,6 +84,18 @@ app.get('/', (req, res) => {
           <td style="padding:10px; text-align:right;">
             <a href="/remove?index=${i}" style="color:#ff5252; text-decoration:none; font-weight:bold;">Remove</a>
           </td>
+        </tr>
+      `).join('');
+
+  // Active in-progress rows
+  const activeRows = state.activeBuilds.length === 0
+    ? `<tr><td colspan="4" style="text-align:center; padding:15px; color:#888;">No active building construction detected</td></tr>`
+    : state.activeBuilds.map((b) => `
+        <tr style="border-bottom: 1px solid #333;">
+          <td style="padding:10px;"><span class="badge badge-active">${state.activeCity}</span></td>
+          <td style="padding:10px;">${b.name}</td>
+          <td style="padding:10px;">Slot #${b.id.replace('buildingSlot', '')}</td>
+          <td style="padding:10px; text-align:right;"><span style="color:#FFB74D; font-weight:bold;">Upgrading (Lvl ${b.level})</span></td>
         </tr>
       `).join('');
 
@@ -107,6 +122,7 @@ app.get('/', (req, res) => {
           table { width: 100%; border-collapse: collapse; text-align: left; }
           th { padding: 10px; background: #2a2a2a; color: #888; }
           .badge { background: #333; padding: 4px 8px; border-radius: 4px; font-size: 0.85em; color: #64B5F6; }
+          .badge-active { background: #E65100; color: #FFF; }
           .presets { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
           .preset-btn { width: auto; background: #333; font-size: 0.8em; padding: 6px 12px; }
         </style>
@@ -114,6 +130,22 @@ app.get('/', (req, res) => {
       <body>
         <div class="container">
           <h2>Dragons of Camelot - Queue Dashboard</h2>
+
+          <!-- ACTIVE CONSTRUCTION CARD -->
+          <div class="card" style="border-left: 4px solid #FF9800;">
+            <h3 style="color:#FF9800;">🔨 Active Construction In Progress (${state.activeBuilds.length})</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>City</th>
+                  <th>Building</th>
+                  <th>Slot ID</th>
+                  <th style="text-align:right;">Status</th>
+                </tr>
+              </thead>
+              <tbody>${activeRows}</tbody>
+            </table>
+          </div>
           
           <div class="card">
             <h3>Schedule Build Target</h3>
@@ -212,10 +244,12 @@ function scrapeCityStates() {
   const cities = [];
 
   buttons.forEach((btn) => {
+    const isSelected = btn.classList.contains('empire-status-selected');
     cities.push({
       id: btn.id,
+      cityName: btn.textContent.trim(),
       isOwned: btn.classList.contains('city-owned'),
-      isSelected: btn.classList.contains('empire-status-selected'),
+      isSelected: isSelected,
       isBuildingBusy: btn.classList.contains('empire-building-busy'),
       isTrainingBusy: btn.classList.contains('empire-training-busy')
     });
@@ -287,8 +321,6 @@ async function getGameFrame(page) {
   const currentUrl = page.url();
   if (currentUrl.includes('index.html')) {
     console.warn(`[BOT WARNING] Redirected to login page (${currentUrl}). Authentication required.`);
-  } else {
-    console.log(`[BOT] Searching frame tree (${frames.length} frames). Current URL: "${currentUrl}"`);
   }
   
   return null;
@@ -312,19 +344,17 @@ async function processQueueLoop() {
     const cityOverview = await targetContext.evaluate(scrapeCityStates);
     const slotsData = await targetContext.evaluate(scrapeCitySlots, IMAGE_MAP);
 
+    // Track active city name
     if (cityOverview.length > 0) {
-      const owned = cityOverview.filter(c => c.isOwned).map(c => c.id.replace('City', ''));
-      const activeBuildingCities = cityOverview.filter(c => c.isBuildingBusy).map(c => c.id.replace('City', ''));
-      
-      console.log(`[BOT] Connected to Game DOM! Owned Cities (${owned.length}): ${owned.join(', ')}`);
-      if (activeBuildingCities.length > 0) {
-        console.log(`[BOT] Cities with active construction: ${activeBuildingCities.join(', ')}`);
+      const currentSelected = cityOverview.find(c => c.isSelected);
+      if (currentSelected) {
+        state.activeCity = currentSelected.id.replace('City', '');
       }
     }
 
+    // Update state with active builds
     if (slotsData && slotsData.length > 0) {
-      const activeUpgrades = slotsData.filter(s => s.isBuilding);
-      console.log(`[BOT] Scanned current city view (${slotsData.length} slots). Active upgrades: ${activeUpgrades.length}`);
+      state.activeBuilds = slotsData.filter(s => s.isBuilding);
     }
 
   } catch (err) {
@@ -350,21 +380,18 @@ async function performLogin(page) {
   console.log('[BOT] Executing login flow on index.html...');
 
   try {
-    // 1. Open the Login Modal popover
     const modalTriggerSelector = 'button[popovertarget="login-modal-wrapper"], button.login-button';
     await page.waitForSelector(modalTriggerSelector, { timeout: 10000 });
     
     console.log('[BOT] Clicking landing page Login button to open modal...');
     await page.click(modalTriggerSelector);
 
-    // 2. Wait for login modal input fields to enter the DOM
     const emailSelector = '#login-email';
     const passwordSelector = '#login-password';
     const submitBtnSelector = '#pain1';
 
     await page.waitForSelector(emailSelector, { visible: true, timeout: 10000 });
 
-    // Focus and type credentials
     console.log('[BOT] Modal opened. Entering credentials...');
     await page.click(emailSelector);
     await page.type(emailSelector, email, { delay: 50 });
@@ -372,10 +399,8 @@ async function performLogin(page) {
     await page.click(passwordSelector);
     await page.type(passwordSelector, password, { delay: 50 });
 
-    // 3. Submit the Login form
     console.log('[BOT] Submitting login form (#pain1)...');
     
-    // Promise.all ensures we capture the form navigation/POST response cleanly
     await Promise.all([
       page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {}),
       page.click(submitBtnSelector)
@@ -383,7 +408,6 @@ async function performLogin(page) {
 
     console.log(`[BOT] Current URL post-auth submit: ${page.url()}`);
 
-    // 4. Launch game session at Great.html
     console.log('[BOT] Navigating to Great.html to start game session...');
     await page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 90000 });
 
@@ -424,7 +448,6 @@ async function initializeBot() {
   console.log('[BOT] Navigating to game landing page...');
   await state.page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 90000 });
 
-  // Give client-side JS redirects a 3-second window to settle on index.html
   await new Promise(resolve => setTimeout(resolve, 3000));
 
   const finalUrl = state.page.url();
