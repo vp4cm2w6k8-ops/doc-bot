@@ -22,7 +22,7 @@ const state = {
   isProcessing: false,
   pendingBuilds: [],
   activeBuilds: [], // Track active upgrades in game slots
-  activeCity: 'Unknown'
+  activeCity: 'Main'
 };
 
 // Full list of Cities/Outposts from the .city-select DOM element
@@ -40,7 +40,7 @@ const BUILDINGS = [
   'Stone Dragon Keep', 'Lava Dragon Keep'
 ];
 
-// Map image filenames to human-readable building names
+// Map image filenames/keys to human-readable building names
 const IMAGE_MAP = {
   'barracks': 'Barracks',
   'house': 'House',
@@ -61,8 +61,7 @@ const IMAGE_MAP = {
   'spec': 'Spectral Keep',
   'silo': 'Silo',
   'camp': 'Camp',
-  'waterhouse': 'House',
-  'building': 'Under Construction'
+  'waterhouse': 'House'
 };
 
 // ==========================================
@@ -93,9 +92,11 @@ app.get('/', (req, res) => {
     : state.activeBuilds.map((b) => `
         <tr style="border-bottom: 1px solid #333;">
           <td style="padding:10px;"><span class="badge badge-active">${state.activeCity}</span></td>
-          <td style="padding:10px;">${b.name}</td>
-          <td style="padding:10px;">Slot #${b.id.replace('buildingSlot', '')}</td>
-          <td style="padding:10px; text-align:right;"><span style="color:#FFB74D; font-weight:bold;">Upgrading (Lvl ${b.level})</span></td>
+          <td style="padding:10px; font-weight:bold; color:#FFF;">${b.name}</td>
+          <td style="padding:10px;">Upgrading to Lvl ${b.level > 0 ? b.level + 1 : 'Next'}</td>
+          <td style="padding:10px; text-align:right;">
+            <span style="color:#FFB74D; font-weight:bold; font-family:monospace; font-size:1.1em;">⏱️ ${b.timeLeft}</span>
+          </td>
         </tr>
       `).join('');
 
@@ -108,6 +109,7 @@ app.get('/', (req, res) => {
       <head>
         <title>DoC Build Manager</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta http-equiv="refresh" content="5">
         <style>
           body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #121212; color: #e0e0e0; margin: 0; padding: 20px; }
           .container { max-width: 800px; margin: 0 auto; }
@@ -133,14 +135,14 @@ app.get('/', (req, res) => {
 
           <!-- ACTIVE CONSTRUCTION CARD -->
           <div class="card" style="border-left: 4px solid #FF9800;">
-            <h3 style="color:#FF9800;">🔨 Active Construction In Progress (${state.activeBuilds.length})</h3>
+            <h3 style="color:#FF9800;">🔨 Active Construction (${state.activeBuilds.length})</h3>
             <table>
               <thead>
                 <tr>
                   <th>City</th>
                   <th>Building</th>
-                  <th>Slot ID</th>
-                  <th style="text-align:right;">Status</th>
+                  <th>Target</th>
+                  <th style="text-align:right;">Time Remaining</th>
                 </tr>
               </thead>
               <tbody>${activeRows}</tbody>
@@ -259,32 +261,61 @@ function scrapeCityStates() {
 }
 
 function scrapeCitySlots(imageMap) {
-  const slots = document.querySelectorAll('button.buildingSlot');
+  const slots = document.querySelectorAll('button.buildingSlot, div.buildingSlot');
   const cityState = [];
 
   slots.forEach((slot) => {
     const levelSpan = slot.querySelector('span');
     const isEmpty = slot.classList.contains('emptyBuildingSlot');
     const currentLevel = (levelSpan && !isEmpty) ? parseInt(levelSpan.textContent.trim(), 10) : 0;
-    const styleBg = slot.style.backgroundImage || '';
-    const isBuilding = slot.getAttribute('data-timer-lock') === '1' || styleBg.includes('Building.gif');
+    const styleBg = (slot.style.backgroundImage || '').toLowerCase();
+    
+    // 1. Check for active construction indicators
+    const hasTimerLock = slot.getAttribute('data-timer-lock') === '1';
+    const hasBuildingGif = styleBg.includes('building.gif');
+    const hasProgressClass = slot.classList.contains('buildingSlotBusy') || slot.classList.contains('in-progress');
+    const timerElem = slot.querySelector('.timer, .construction-timer, .slot-timer, [id*="timer"], [id*="time"]');
 
-    let detectedName = isEmpty ? 'Empty Slot' : 'Unknown';
-    if (!isEmpty) {
-      for (const [key, val] of Object.entries(imageMap)) {
-        if (styleBg.toLowerCase().includes(key)) {
-          detectedName = val;
-          break;
-        }
+    const isBuilding = hasTimerLock || hasBuildingGif || hasProgressClass || !!timerElem;
+
+    // 2. Extract remaining time if timer element exists
+    let timeLeft = 'In Progress';
+    if (timerElem && timerElem.textContent.trim()) {
+      timeLeft = timerElem.textContent.trim();
+    } else {
+      // Fallback: check global building progress bar/overlay if present in the slot
+      const altTimer = slot.querySelector('div span, p');
+      if (altTimer && /\d{1,2}:\d{2}/.test(altTimer.textContent)) {
+        timeLeft = altTimer.textContent.trim();
+      }
+    }
+
+    // 3. Resolve human-readable building name
+    let detectedName = isEmpty ? 'Empty Slot' : 'Building';
+    
+    // Check background image matching first
+    for (const [key, val] of Object.entries(imageMap)) {
+      if (styleBg.includes(key.toLowerCase())) {
+        detectedName = val;
+        break;
+      }
+    }
+
+    // Fallback: Check title or tooltip attributes if background mapping failed
+    if (detectedName === 'Building' || detectedName === 'Under Construction') {
+      const tooltip = slot.getAttribute('title') || slot.getAttribute('data-title') || slot.getAttribute('aria-label');
+      if (tooltip) {
+        detectedName = tooltip.split('-')[0].split('Lvl')[0].trim();
       }
     }
 
     cityState.push({
-      id: slot.id,
+      id: slot.id || 'unknown_slot',
       name: detectedName,
       level: currentLevel,
       isEmpty,
-      isBuilding
+      isBuilding,
+      timeLeft
     });
   });
 
@@ -298,7 +329,6 @@ function scrapeCitySlots(imageMap) {
 async function getGameFrame(page) {
   const frames = page.frames();
 
-  // Check main page context
   try {
     const mainHasBtn = await page.evaluate(() => 
       !!(document.querySelector('.buildingSlot') || document.querySelector('.city-select'))
@@ -306,7 +336,6 @@ async function getGameFrame(page) {
     if (mainHasBtn) return page;
   } catch (e) {}
 
-  // Check child frames
   for (const frame of frames) {
     try {
       const frameHasBtn = await frame.evaluate(() => 
@@ -348,11 +377,11 @@ async function processQueueLoop() {
     if (cityOverview.length > 0) {
       const currentSelected = cityOverview.find(c => c.isSelected);
       if (currentSelected) {
-        state.activeCity = currentSelected.id.replace('City', '');
+        state.activeCity = currentSelected.cityName || currentSelected.id.replace('City', '');
       }
     }
 
-    // Update state with active builds
+    // Update active builds state
     if (slotsData && slotsData.length > 0) {
       state.activeBuilds = slotsData.filter(s => s.isBuilding);
     }
@@ -383,7 +412,7 @@ async function performLogin(page) {
     const modalTriggerSelector = 'button[popovertarget="login-modal-wrapper"], button.login-button';
     await page.waitForSelector(modalTriggerSelector, { timeout: 10000 });
     
-    console.log('[BOT] Clicking landing page Login button to open modal...');
+    console.log('[BOT] Opening login modal...');
     await page.click(modalTriggerSelector);
 
     const emailSelector = '#login-email';
@@ -392,28 +421,23 @@ async function performLogin(page) {
 
     await page.waitForSelector(emailSelector, { visible: true, timeout: 10000 });
 
-    console.log('[BOT] Modal opened. Entering credentials...');
     await page.click(emailSelector);
     await page.type(emailSelector, email, { delay: 50 });
 
     await page.click(passwordSelector);
     await page.type(passwordSelector, password, { delay: 50 });
 
-    console.log('[BOT] Submitting login form (#pain1)...');
+    console.log('[BOT] Submitting credentials...');
     
     await Promise.all([
       page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {}),
       page.click(submitBtnSelector)
     ]);
 
-    console.log(`[BOT] Current URL post-auth submit: ${page.url()}`);
-
-    console.log('[BOT] Navigating to Great.html to start game session...');
+    console.log('[BOT] Navigating to Great.html...');
     await page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 90000 });
 
     await new Promise(resolve => setTimeout(resolve, 3000));
-    console.log(`[BOT] Final URL after game launch attempt: ${page.url()}`);
-
     return !page.url().includes('index.html');
   } catch (err) {
     console.error('[BOT ERROR] Failed during form login sequence:', err.message);
@@ -442,23 +466,18 @@ async function initializeBot() {
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   );
 
-  state.page.on('frameattached', frame => console.log(`[BOT] Frame attached: ${frame.url()}`));
-  state.page.on('framenavigated', frame => console.log(`[BOT] Frame navigated: ${frame.url()}`));
-
-  console.log('[BOT] Navigating to game landing page...');
+  console.log('[BOT] Loading game page...');
   await state.page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 90000 });
 
   await new Promise(resolve => setTimeout(resolve, 3000));
 
   const finalUrl = state.page.url();
-  console.log(`[BOT] Page URL after load settlement: "${finalUrl}"`);
-
   if (finalUrl.includes('index.html')) {
-    console.log('[BOT] Unauthenticated session detected. Triggering automated login flow...');
+    console.log('[BOT] Session unauthenticated. Performing automated login...');
     await performLogin(state.page);
   }
 
-  console.log('[BOT] Setup complete. Entering main polling loop...');
+  console.log('[BOT] Setup complete. Active construction polling enabled.');
   setInterval(processQueueLoop, CONFIG.pollIntervalMs);
 }
 
