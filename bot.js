@@ -22,8 +22,26 @@ const state = {
   pendingBuilds: []
 };
 
-// Supported game cities
+// Game Options for Control Panel Dropdowns
 const CITIES = ['Main', 'Water', 'Lava', 'Stone', 'Chronos', 'Ice', 'Sunken', 'Wind', 'Gaia'];
+const BUILDINGS = [
+  'Camp',
+  'Keep',
+  'Home',
+  'Garrison',
+  'Wall',
+  'Dragon Keep',
+  'Wilderness Camp',
+  'Silo',
+  'Storehouse',
+  'Balk',
+  'Mine',
+  'Quarry',
+  'Sawmill',
+  'Alchemy Lab',
+  'Knight's Hall',
+  'Rally Point'
+];
 
 // ==========================================
 // 1. EXPRESS HTTP SERVER & DASHBOARD
@@ -48,6 +66,7 @@ app.get('/', (req, res) => {
       `).join('');
 
   const cityOptions = CITIES.map(c => `<option value="${c}">${c}</option>`).join('');
+  const buildingOptions = BUILDINGS.map(b => `<option value="${b}">${b}</option>`).join('');
 
   res.send(`
     <!DOCTYPE html>
@@ -87,8 +106,8 @@ app.get('/', (req, res) => {
                   <select name="location">${cityOptions}</select>
                 </div>
                 <div>
-                  <label style="font-size:0.8em; color:#888;">Building Name</label>
-                  <input type="text" name="name" placeholder="e.g. Camp or Keep" required>
+                  <label style="font-size:0.8em; color:#888;">Building Type</label>
+                  <select name="name">${buildingOptions}</select>
                 </div>
                 <div>
                   <label style="font-size:0.8em; color:#888;">Target Level</label>
@@ -164,23 +183,6 @@ app.get('/clear', (req, res) => {
   res.redirect('/');
 });
 
-// POST Endpoint: JSON integration
-app.post('/add-build', (req, res) => {
-  const { location, name, targetLevel } = req.body;
-  if (!location || !name || !targetLevel) {
-    return res.status(400).json({ error: 'Missing parameters: location, name, targetLevel' });
-  }
-
-  state.pendingBuilds.push({ location, name, targetLevel });
-  console.log(`[HTTP API] Added target: ${name} Lvl ${targetLevel} at [${location}]`);
-  
-  return res.json({
-    success: true,
-    message: `Added ${name} Lvl ${targetLevel} in ${location} to queue.`,
-    queueLength: state.pendingBuilds.length
-  });
-});
-
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[SERVER] Express web server listening on port ${PORT}`);
 });
@@ -246,15 +248,25 @@ function isCityBusy(activeQueue, locationName) {
   );
 }
 
+/**
+ * Enhanced frame resolver that checks all active frames and sub-frames for game elements
+ */
 async function getGameFrame(page) {
-  const mainHasBtn = await page.evaluate(() => !!(document.querySelector('#OpenBar') || document.querySelector('.constructionItemList')));
-  if (mainHasBtn) return page;
+  // Check main page first
+  try {
+    const mainHasBtn = await page.evaluate(() => !!(document.querySelector('#OpenBar') || document.querySelector('.constructionItemList')));
+    if (mainHasBtn) return page;
+  } catch (e) {}
 
-  for (const frame of page.frames()) {
+  // Iterate over all iframe contexts
+  const frames = page.frames();
+  for (const frame of frames) {
     try {
       const frameHasBtn = await frame.evaluate(() => !!(document.querySelector('#OpenBar') || document.querySelector('.constructionItemList')));
       if (frameHasBtn) return frame;
-    } catch (e) {}
+    } catch (e) {
+      // Ignore cross-origin context restriction warnings
+    }
   }
 
   return null;
@@ -272,7 +284,7 @@ async function processQueueLoop() {
     const targetContext = await getGameFrame(state.page);
 
     if (!targetContext) {
-      console.log('[BOT] Waiting for #OpenBar construction button in DOM...');
+      console.log('[BOT] Waiting for #OpenBar construction button in DOM (scanned ' + state.page.frames().length + ' frames)...');
       return;
     }
 
@@ -329,7 +341,9 @@ async function initializeBot() {
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-accelerated-2d-canvas',
-      '--disable-gpu'
+      '--disable-gpu',
+      '--disable-web-security', // Helps Puppeteer access nested game iframes
+      '--allow-running-insecure-content'
     ]
   });
 
@@ -340,7 +354,7 @@ async function initializeBot() {
   );
 
   console.log('[BOT] Navigating to game...');
-  await state.page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+  await state.page.goto(CONFIG.gameUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
   console.log('[BOT] Game context hooked successfully!');
   console.log('[BOT] Entering main queue polling loop...');
