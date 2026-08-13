@@ -24,50 +24,19 @@ const state = {
 
 // Full list of Cities/Outposts from the .city-select DOM element
 const CITIES = [
-  'Main',
-  'Water',
-  'Soul',
-  'Abyssal',
-  'Chronos',
-  'Stone',
-  'Ice',
-  'Tempest',
-  'Skythrone',
-  'Lava',
-  'Sunken',
-  'Steelshard',
-  'Wind',
-  'Gaia',
-  'Luna',
-  'Solarian',
-  'Lost'
+  'Main', 'Water', 'Soul', 'Abyssal', 'Chronos', 'Stone', 'Ice',
+  'Tempest', 'Skythrone', 'Lava', 'Sunken', 'Steelshard', 'Wind',
+  'Gaia', 'Luna', 'Solarian', 'Lost'
 ];
 
 const BUILDINGS = [
-  'Barracks',
-  'House',
-  'Keep',
-  'Rally Point',
-  'Dragon Keep',
-  'Sentinel',
-  'Science',
-  'Metal',
-  'Officer',
-  'Factory',
-  'Storehouse',
-  'Theater',
-  'Camp',
-  'Garrison',
-  'Wall',
-  'Portal',
-  'Mausoleum',
-  'Spectral Keep',
-  'Silo',
-  'Stone Dragon Keep',
-  'Lava Dragon Keep'
+  'Barracks', 'House', 'Keep', 'Rally Point', 'Dragon Keep',
+  'Sentinel', 'Science', 'Metal', 'Officer', 'Factory',
+  'Storehouse', 'Theater', 'Camp', 'Garrison', 'Wall',
+  'Portal', 'Mausoleum', 'Spectral Keep', 'Silo',
+  'Stone Dragon Keep', 'Lava Dragon Keep'
 ];
 
-// Map image filenames to human-readable building names
 const IMAGE_MAP = {
   'barracks': 'Barracks',
   'house': 'House',
@@ -98,7 +67,6 @@ const IMAGE_MAP = {
 const app = express();
 app.use(express.json());
 
-// Web Control Panel Interface
 app.get('/', (req, res) => {
   const pendingRows = state.pendingBuilds.length === 0
     ? `<tr><td colspan="5" style="text-align:center; padding:15px; color:#888;">No pending builds scheduled</td></tr>`
@@ -145,7 +113,6 @@ app.get('/', (req, res) => {
         <div class="container">
           <h2>Dragons of Camelot - Queue Dashboard</h2>
           
-          <!-- Add Task Form -->
           <div class="card">
             <h3>Schedule Build Target</h3>
             <form action="/add" method="GET">
@@ -176,7 +143,6 @@ app.get('/', (req, res) => {
             </div>
           </div>
 
-          <!-- Queue State -->
           <div class="card">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
               <h3 style="margin:0;">Pending Build Schedule (${state.pendingBuilds.length})</h3>
@@ -201,7 +167,6 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Add Task
 app.get('/add', (req, res) => {
   const location = req.query.location;
   const name = req.query.name || 'Building';
@@ -211,11 +176,9 @@ app.get('/add', (req, res) => {
     state.pendingBuilds.push({ location, name, targetLevel });
     console.log(`[CONTROL PANEL] Added build: ${name} Lvl ${targetLevel} in [${location}]`);
   }
-  
   res.redirect('/');
 });
 
-// Remove Single Task
 app.get('/remove', (req, res) => {
   const index = parseInt(req.query.index, 10);
   if (!isNaN(index) && index >= 0 && index < state.pendingBuilds.length) {
@@ -225,7 +188,6 @@ app.get('/remove', (req, res) => {
   res.redirect('/');
 });
 
-// Clear Queue
 app.get('/clear', (req, res) => {
   state.pendingBuilds = [];
   console.log('[CONTROL PANEL] Cleared all pending queue targets.');
@@ -237,7 +199,7 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 // ==========================================
-// 2. BROWSER DOM SCRAPERS
+// 2. DOM SCRAPERS
 // ==========================================
 
 function scrapeCityStates() {
@@ -248,18 +210,12 @@ function scrapeCityStates() {
   const cities = [];
 
   buttons.forEach((btn) => {
-    const id = btn.id;
-    const isOwned = btn.classList.contains('city-owned');
-    const isSelected = btn.classList.contains('empire-status-selected');
-    const isBuildingBusy = btn.classList.contains('empire-building-busy');
-    const isTrainingBusy = btn.classList.contains('empire-training-busy');
-
     cities.push({
-      id,
-      isOwned,
-      isSelected,
-      isBuildingBusy,
-      isTrainingBusy
+      id: btn.id,
+      isOwned: btn.classList.contains('city-owned'),
+      isSelected: btn.classList.contains('empire-status-selected'),
+      isBuildingBusy: btn.classList.contains('empire-building-busy'),
+      isTrainingBusy: btn.classList.contains('empire-training-busy')
     });
   });
 
@@ -271,7 +227,6 @@ function scrapeCitySlots(imageMap) {
   const cityState = [];
 
   slots.forEach((slot) => {
-    const slotId = slot.id;
     const levelSpan = slot.querySelector('span');
     const isEmpty = slot.classList.contains('emptyBuildingSlot');
     const currentLevel = (levelSpan && !isEmpty) ? parseInt(levelSpan.textContent.trim(), 10) : 0;
@@ -289,11 +244,11 @@ function scrapeCitySlots(imageMap) {
     }
 
     cityState.push({
-      id: slotId,
+      id: slot.id,
       name: detectedName,
       level: currentLevel,
-      isEmpty: isEmpty,
-      isBuilding: isBuilding
+      isEmpty,
+      isBuilding
     });
   });
 
@@ -307,7 +262,7 @@ function scrapeCitySlots(imageMap) {
 async function getGameFrame(page) {
   const frames = page.frames();
 
-  // Check main page context
+  // Check main page
   try {
     const mainHasBtn = await page.evaluate(() => 
       !!(document.querySelector('.buildingSlot') || document.querySelector('.city-select'))
@@ -327,8 +282,11 @@ async function getGameFrame(page) {
     } catch (e) {}
   }
 
-  // Debug logging: show total frame count if not found yet
-  console.log(`[BOT] Searching frame tree (${frames.length} frames detected)...`);
+  // Diagnostic log showing current URL and Frame URLs
+  const currentUrl = page.url();
+  const frameUrls = frames.map(f => f.url()).join(', ');
+  console.log(`[BOT] Searching frame tree (${frames.length} frames). Current Page URL: "${currentUrl}". Frame URLs: [${frameUrls}]`);
+  
   return null;
 }
 
@@ -354,7 +312,7 @@ async function processQueueLoop() {
       const owned = cityOverview.filter(c => c.isOwned).map(c => c.id.replace('City', ''));
       const activeBuildingCities = cityOverview.filter(c => c.isBuildingBusy).map(c => c.id.replace('City', ''));
       
-      console.log(`[BOT] Owned Cities (${owned.length}): ${owned.join(', ')}`);
+      console.log(`[BOT] Hooked successfully! Owned Cities (${owned.length}): ${owned.join(', ')}`);
       if (activeBuildingCities.length > 0) {
         console.log(`[BOT] Cities with active construction: ${activeBuildingCities.join(', ')}`);
       }
@@ -397,18 +355,17 @@ async function initializeBot() {
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   );
 
+  // Monitor frame additions dynamically
+  state.page.on('frameattached', frame => console.log(`[BOT] Frame attached: ${frame.url()}`));
+  state.page.on('framenavigated', frame => console.log(`[BOT] Frame navigated: ${frame.url()}`));
+
   console.log('[BOT] Navigating to game...');
-  
-  // Network idle ensures resources like game frames finish loading
   await state.page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 90000 });
 
-  console.log('[BOT] Game context hooked successfully!');
-  console.log('[BOT] Entering main queue polling loop...');
-
+  console.log('[BOT] Initial load complete. Entering polling loop...');
   setInterval(processQueueLoop, CONFIG.pollIntervalMs);
 }
 
-// Launch Bot
 initializeBot().catch((err) => {
   console.error('[BOT] Startup error:', err);
   process.exit(1);
