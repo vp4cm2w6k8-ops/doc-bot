@@ -5,13 +5,20 @@ const app = express();
 app.use(express.json());
 const PORT = process.env.PORT || 10000;
 
-// --- URL SANITIZER ---
+// --- ROBUST URL SANITIZER ---
 function sanitizeUrl(rawUrl) {
     let url = (rawUrl || 'https://www.dragonsofcamelot.com').trim();
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-        url = 'https://' + url;
+    
+    // Strip markdown links if present (e.g. [text](https://example.com))
+    const mdMatch = url.match(/\[.*?\]\((.*?)\)/);
+    if (mdMatch) {
+        url = mdMatch[1].trim();
     }
-    return url;
+    
+    // Clean up duplicate protocol prefixes (e.g., https://https://)
+    url = url.replace(/^(https?:\/\/)+/gi, '');
+    
+    return 'https://' + url;
 }
 
 // --- CONFIGURATION ---
