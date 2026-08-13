@@ -8,16 +8,9 @@ const PORT = process.env.PORT || 10000;
 // --- ROBUST URL SANITIZER ---
 function sanitizeUrl(rawUrl) {
     let url = (rawUrl || 'https://www.dragonsofcamelot.com').trim();
-    
-    // Strip markdown links if present (e.g. [text](https://example.com))
     const mdMatch = url.match(/\[.*?\]\((.*?)\)/);
-    if (mdMatch) {
-        url = mdMatch[1].trim();
-    }
-    
-    // Clean up duplicate protocol prefixes (e.g., https://https://)
+    if (mdMatch) url = mdMatch[1].trim();
     url = url.replace(/^(https?:\/\/)+/gi, '');
-    
     return 'https://' + url;
 }
 
@@ -171,10 +164,96 @@ async function getGameFrame(page) {
             const hasSeed = await frame.evaluate(() => typeof window.seed !== 'undefined' || typeof window.Modal !== 'undefined');
             if (hasSeed) return frame;
         } catch (e) {
-            // Ignore cross-origin frame access restriction errors
+            // Ignore cross-origin errors
         }
     }
     return null;
+}
+
+// Scans for the login button first, triggers it, then fills credentials across frames
+async function findAndFillLogin(page, username, password) {
+    // 1. Target and click the initial "Login" or "Sign In" button on the portal
+    try {
+        const clickedTrigger = await page.evaluate(() => {
+            const explicitSelectors = ['#login-btn', '.login-btn', '#btn-login', 'a[href*="login"]', 'button[class*="login"]', '.sign-in', '#sign-in'];
+            for (const sel of explicitSelectors) {
+                const el = document.querySelector(sel);
+                if (el && el.offsetWidth > 0) {
+                    el.click();
+                    return true;
+                }
+            }
+
+            // Fallback: search visible elements for login text
+            const elements = Array.from(document.querySelectorAll('a, button, div, span')).filter(el => el.offsetWidth > 0);
+            const loginBtn = elements.find(el => {
+                const txt = (el.innerText || '').trim().toLowerCase();
+                return txt === 'log in' || txt === 'login' || txt === 'sign in';
+            });
+
+            if (loginBtn) {
+                loginBtn.click();
+                return true;
+            }
+            return false;
+        });
+
+        if (clickedTrigger) {
+            console.log('[BOT] Clicked initial Login trigger button. Waiting for modal...');
+            await sleep(2000);
+        }
+    } catch (e) {
+        // Continue to scanning if clicking fails
+    }
+
+    // 2. Scan frames for form inputs
+    const emailSelectors = ['#login-email', '#email', 'input[type="email"]', 'input[name="username"]', 'input[name="email"]', '#username'];
+    const passSelectors = ['#login-password', '#password', 'input[type="password"]', 'input[name="password"]'];
+
+    const frames = page.frames();
+    for (const frame of frames) {
+        try {
+            const filled = await frame.evaluate((eSels, pSels, user, pass) => {
+                let emailEl = null;
+                let passEl = null;
+
+                for (const sel of eSels) {
+                    const el = document.querySelector(sel);
+                    if (el && el.offsetWidth > 0) { emailEl = el; break; }
+                }
+
+                for (const sel of pSels) {
+                    const el = document.querySelector(sel);
+                    if (el && el.offsetWidth > 0) { passEl = el; break; }
+                }
+
+                if (emailEl && passEl) {
+                    emailEl.value = user;
+                    emailEl.dispatchEvent(new Event('input', { bubbles: true }));
+                    emailEl.dispatchEvent(new Event('change', { bubbles: true }));
+
+                    passEl.value = pass;
+                    passEl.dispatchEvent(new Event('input', { bubbles: true }));
+                    passEl.dispatchEvent(new Event('change', { bubbles: true }));
+
+                    const submitBtn = document.querySelector('form button[type="submit"], #pain1, input[type="submit"], .btn-login, #login-btn, button[type="submit"]');
+                    if (submitBtn) {
+                        submitBtn.click();
+                    } else {
+                        const parentForm = emailEl.closest('form');
+                        if (parentForm) parentForm.submit();
+                    }
+                    return true;
+                }
+                return false;
+            }, emailSelectors, passSelectors, username, password);
+
+            if (filled) return true;
+        } catch (e) {
+            // Ignore cross-origin context errors
+        }
+    }
+    return false;
 }
 
 async function checkSlotBusy(frame, type) {
@@ -260,52 +339,26 @@ async function startQueueBot() {
         console.log('[BOT] Navigating to game portal...');
         await page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2' });
 
-        // --- ROBUST LOGIN HANDLER FOR MODAL FORM ---
-        try {
-            const emailSel = '#login-email';
-            const passSel = '#login-password';
+        // Multi-frame, multi-selector login attempt
+        let loggedIn = false;
+        for (let i = 0; i < 5; i++) {
+            console.log(`[BOT] Scanning for login button and form (Attempt ${i + 1}/5)...`);
+            loggedIn = await findAndFillLogin(page, CONFIG.username, CONFIG.password);
+            if (loggedIn) {
+                console.log('[BOT] Login form found and submitted!');
+                await sleep(5000);
+                break;
+            }
+            await sleep(2000);
+        }
 
-            // Wait up to 10s for email input to be fully visible and interactable
-            await page.waitForSelector(emailSel, { visible: true, timeout: 10000 });
-            console.log('[BOT] Login modal detected and visible. Filling credentials...');
-
-            // Safely set email value directly via JS + trigger change events
-            await page.evaluate((sel, user) => {
-                const el = document.querySelector(sel);
-                if (el) {
-                    el.value = user;
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-            }, emailSel, CONFIG.username);
-
-            // Safely set password value directly via JS + trigger change events
-            await page.evaluate((sel, pass) => {
-                const el = document.querySelector(sel);
-                if (el) {
-                    el.value = pass;
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-            }, passSel, CONFIG.password);
-
-            console.log('[BOT] Submitting login form...');
-            await Promise.all([
-                page.evaluate(() => {
-                    const btn = document.querySelector('form#login-form button[type="submit"]') || document.querySelector('#pain1');
-                    if (btn) btn.click();
-                }),
-                page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {})
-            ]);
-            
-            console.log('[BOT] Login submitted successfully.');
-        } catch (err) {
-            console.log('[BOT] Login attempt skipped/handled:', err.message);
+        if (!loggedIn) {
+            console.log('[BOT] Login form not found or session already active. Proceeding to game frame check...');
         }
 
         console.log('[BOT] Waiting for Game Frame initialization...');
         let targetFrame = null;
-        for (let i = 0; i < 12; i++) {
+        for (let i = 0; i < 15; i++) {
             targetFrame = await getGameFrame(page);
             if (targetFrame) break;
             await sleep(3000);
