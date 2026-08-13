@@ -1,5 +1,5 @@
 /**
- * Dragons of Camelot - Complete Headless Bot & Queue Manager
+ * Dragons of Camelot - Headless Bot & Control Panel
  * Target Environment: Node.js (Render Web Service)
  */
 
@@ -22,80 +22,157 @@ const state = {
   pendingBuilds: []
 };
 
+// Supported game cities
+const CITIES = ['Main', 'Water', 'Lava', 'Stone', 'Chronos', 'Ice', 'Sunken', 'Wind', 'Gaia'];
+
 // ==========================================
-// 1. EXPRESS HTTP SERVER & WEB LINK API
+// 1. EXPRESS HTTP SERVER & DASHBOARD
 // ==========================================
 const app = express();
 app.use(express.json());
 
-// Main Status Health Check Page
+// Web Control Panel Interface
 app.get('/', (req, res) => {
-  let pendingListHtml = state.pendingBuilds.length === 0 
-    ? '<em>No pending tasks queued</em>'
-    : state.pendingBuilds.map((b, i) => `<li><strong>#${i+1}</strong>: [${b.location}] ${b.name} Lvl ${b.targetLevel}</li>`).join('');
+  const pendingRows = state.pendingBuilds.length === 0
+    ? `<tr><td colspan="5" style="text-align:center; padding:15px; color:#888;">No pending builds scheduled</td></tr>`
+    : state.pendingBuilds.map((b, i) => `
+        <tr style="border-bottom: 1px solid #333;">
+          <td style="padding:10px;">#${i + 1}</td>
+          <td style="padding:10px;"><span class="badge">${b.location}</span></td>
+          <td style="padding:10px;">${b.name}</td>
+          <td style="padding:10px;">Level ${b.targetLevel}</td>
+          <td style="padding:10px; text-align:right;">
+            <a href="/remove?index=${i}" style="color:#ff5252; text-decoration:none; font-weight:bold;">Remove</a>
+          </td>
+        </tr>
+      `).join('');
+
+  const cityOptions = CITIES.map(c => `<option value="${c}">${c}</option>`).join('');
 
   res.send(`
+    <!DOCTYPE html>
     <html>
-      <head><title>DoC Queue Bot</title></head>
-      <body style="font-family: Arial, sans-serif; padding: 20px; background: #121212; color: #e0e0e0;">
-        <h2 style="color: #4CAF50;">Bot Status: Online</h2>
-        <p><strong>Pending Tasks Count:</strong> ${state.pendingBuilds.length}</p>
-        <h3>Pending Build Queue:</h3>
-        <ul>${pendingListHtml}</ul>
-        <hr style="border-color: #333;" />
-        <h4>Quick Link Quick-Start Format:</h4>
-        <code>/add?location=Water&name=Camp&targetLevel=10</code>
+      <head>
+        <title>DoC Build Manager</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #121212; color: #e0e0e0; margin: 0; padding: 20px; }
+          .container { max-width: 800px; margin: 0 auto; }
+          .card { background: #1e1e1e; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+          h2, h3 { margin-top: 0; color: #4CAF50; }
+          .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 15px; }
+          select, input, button { width: 100%; padding: 10px; border-radius: 4px; border: 1px solid #333; background: #2a2a2a; color: #fff; box-sizing: border-box; }
+          button { background: #4CAF50; color: white; font-weight: bold; border: none; cursor: pointer; transition: background 0.2s; }
+          button:hover { background: #45a049; }
+          .btn-danger { background: #d32f2f; }
+          .btn-danger:hover { background: #b71c1c; }
+          table { width: 100%; border-collapse: collapse; text-align: left; }
+          th { padding: 10px; background: #2a2a2a; color: #888; }
+          .badge { background: #333; padding: 4px 8px; border-radius: 4px; font-size: 0.85em; color: #64B5F6; }
+          .presets { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+          .preset-btn { width: auto; background: #333; font-size: 0.8em; padding: 6px 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h2>Dragons of Camelot - Queue Dashboard</h2>
+          
+          <!-- Add Task Form -->
+          <div class="card">
+            <h3>Schedule Build Target</h3>
+            <form action="/add" method="GET">
+              <div class="grid">
+                <div>
+                  <label style="font-size:0.8em; color:#888;">City Location</label>
+                  <select name="location">${cityOptions}</select>
+                </div>
+                <div>
+                  <label style="font-size:0.8em; color:#888;">Building Name</label>
+                  <input type="text" name="name" placeholder="e.g. Camp or Keep" required>
+                </div>
+                <div>
+                  <label style="font-size:0.8em; color:#888;">Target Level</label>
+                  <input type="number" name="targetLevel" value="10" min="1" max="20" required>
+                </div>
+              </div>
+              <button type="submit">Queue Build Command</button>
+            </form>
+
+            <div style="margin-top:15px;">
+              <span style="font-size:0.8em; color:#888;">Quick Presets:</span>
+              <div class="presets">
+                <a href="/add?location=Water&name=Camp&targetLevel=10"><button class="preset-btn">+ Water Camp Lvl 10</button></a>
+                <a href="/add?location=Lava&name=Camp&targetLevel=10"><button class="preset-btn">+ Lava Camp Lvl 10</button></a>
+                <a href="/add?location=Main&name=Keep&targetLevel=11"><button class="preset-btn">+ Main Keep Lvl 11</button></a>
+              </div>
+            </div>
+          </div>
+
+          <!-- Queue State -->
+          <div class="card">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+              <h3 style="margin:0;">Pending Build Schedule (${state.pendingBuilds.length})</h3>
+              ${state.pendingBuilds.length > 0 ? `<a href="/clear" style="text-decoration:none;"><button class="btn-danger" style="width:auto; padding:6px 12px;">Clear All</button></a>` : ''}
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Location</th>
+                  <th>Building</th>
+                  <th>Target</th>
+                  <th style="text-align:right;">Action</th>
+                </tr>
+              </thead>
+              <tbody>${pendingRows}</tbody>
+            </table>
+          </div>
+        </div>
       </body>
     </html>
   `);
 });
 
-// GET Endpoint: Add build tasks directly via browser URL/link
-// Example: https://your-app-name.onrender.com/add?location=Water&name=Camp&targetLevel=10
+// Add Task via URL parameter or form submit
 app.get('/add', (req, res) => {
   const location = req.query.location;
   const name = req.query.name || 'Building';
   const targetLevel = parseInt(req.query.targetLevel, 10) || 1;
 
-  if (!location) {
-    return res.status(400).send(`
-      <body style="font-family: sans-serif; padding: 20px; background: #121212; color: #ff5252;">
-        <h2>Error: Missing location parameter</h2>
-        <p>Example link: <code>/add?location=Water&name=Camp&targetLevel=10</code></p>
-      </body>
-    `);
+  if (location) {
+    state.pendingBuilds.push({ location, name, targetLevel });
+    console.log(`[CONTROL PANEL] Added build: ${name} Lvl ${targetLevel} in [${location}]`);
   }
-
-  // Add task to state queue
-  state.pendingBuilds.push({ location, name, targetLevel });
-  console.log(`[URL API] Added task: ${name} Lvl ${targetLevel} in [${location}]`);
-
-  // Confirmation response page
-  res.send(`
-    <html>
-      <body style="font-family: Arial, sans-serif; padding: 20px; background: #121212; color: #ffffff;">
-        <h2 style="color: #4CAF50;">Task Added to Queue!</h2>
-        <ul style="line-height: 1.6;">
-          <li><strong>Location:</strong> ${location}</li>
-          <li><strong>Building:</strong> ${name}</li>
-          <li><strong>Target Level:</strong> ${targetLevel}</li>
-        </ul>
-        <p>Total Tasks Pending: <strong>${state.pendingBuilds.length}</strong></p>
-        <p><a href="/" style="color: #64B5F6; text-decoration: none;">View Status Page</a></p>
-      </body>
-    </html>
-  `);
+  
+  res.redirect('/');
 });
 
-// POST Endpoint: Add build tasks via JSON payload
+// Remove Single Task
+app.get('/remove', (req, res) => {
+  const index = parseInt(req.query.index, 10);
+  if (!isNaN(index) && index >= 0 && index < state.pendingBuilds.length) {
+    const removed = state.pendingBuilds.splice(index, 1);
+    console.log(`[CONTROL PANEL] Removed item #${index + 1}:`, removed[0]);
+  }
+  res.redirect('/');
+});
+
+// Clear Entire Queue
+app.get('/clear', (req, res) => {
+  state.pendingBuilds = [];
+  console.log('[CONTROL PANEL] Cleared all pending queue targets.');
+  res.redirect('/');
+});
+
+// POST Endpoint: JSON integration
 app.post('/add-build', (req, res) => {
   const { location, name, targetLevel } = req.body;
   if (!location || !name || !targetLevel) {
-    return res.status(400).json({ error: 'Missing required parameters: location, name, targetLevel' });
+    return res.status(400).json({ error: 'Missing parameters: location, name, targetLevel' });
   }
 
   state.pendingBuilds.push({ location, name, targetLevel });
-  console.log(`[HTTP API] Added target: ${name} (Lvl ${targetLevel}) at [${location}]`);
+  console.log(`[HTTP API] Added target: ${name} Lvl ${targetLevel} at [${location}]`);
   
   return res.json({
     success: true,
@@ -112,10 +189,6 @@ app.listen(PORT, '0.0.0.0', () => {
 // 2. BROWSER DOM SCRAPERS
 // ==========================================
 
-/**
- * Ensures the construction list panel is expanded (#OpenBar),
- * then scrapes active queue items.
- */
 function ensureOpenAndScrapeQueue() {
   const container = document.querySelector('.constructionItemList');
   const openBtn = document.querySelector('#OpenBar');
@@ -181,9 +254,7 @@ async function getGameFrame(page) {
     try {
       const frameHasBtn = await frame.evaluate(() => !!(document.querySelector('#OpenBar') || document.querySelector('.constructionItemList')));
       if (frameHasBtn) return frame;
-    } catch (e) {
-      // Cross-origin frame access safety catch
-    }
+    } catch (e) {}
   }
 
   return null;
