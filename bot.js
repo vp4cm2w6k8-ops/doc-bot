@@ -25,23 +25,39 @@ const state = {
 // Game Options for Control Panel Dropdowns
 const CITIES = ['Main', 'Water', 'Lava', 'Stone', 'Chronos', 'Ice', 'Sunken', 'Wind', 'Gaia'];
 const BUILDINGS = [
-  'Camp',
+  'Barracks',
+  'House',
   'Keep',
-  'Home',
-  'Garrison',
-  'Wall',
+  'Rally Point',
   'Dragon Keep',
-  'Wilderness Camp',
-  'Silo',
+  'Sentinel',
+  'Science',
+  'Metal',
+  'Officer',
+  'Factory',
   'Storehouse',
-  'Balk',
-  'Mine',
-  'Quarry',
-  'Sawmill',
-  'Alchemy Lab',
-  'Knight's Hall',
-  'Rally Point'
+  'Theater',
+  'Camp',
+  'Garrison',
+  'Wall'
 ];
+
+// Map image filenames to human-readable building names
+const IMAGE_MAP = {
+  'barracks': 'Barracks',
+  'house': 'House',
+  'adultdragon': 'Dragon Keep',
+  'rally': 'Rally Point',
+  'theater': 'Theater',
+  'mstore': 'Storehouse',
+  'wstore': 'Storehouse',
+  'factory': 'Factory',
+  'sentinel': 'Sentinel',
+  'science': 'Science',
+  'metal': 'Metal',
+  'officer': 'Officer',
+  'building': 'Under Construction'
+};
 
 // ==========================================
 // 1. EXPRESS HTTP SERVER & DASHBOARD
@@ -120,9 +136,9 @@ app.get('/', (req, res) => {
             <div style="margin-top:15px;">
               <span style="font-size:0.8em; color:#888;">Quick Presets:</span>
               <div class="presets">
-                <a href="/add?location=Water&name=Camp&targetLevel=10"><button class="preset-btn">+ Water Camp Lvl 10</button></a>
-                <a href="/add?location=Lava&name=Camp&targetLevel=10"><button class="preset-btn">+ Lava Camp Lvl 10</button></a>
-                <a href="/add?location=Main&name=Keep&targetLevel=11"><button class="preset-btn">+ Main Keep Lvl 11</button></a>
+                <a href="/add?location=Water&name=Barracks&targetLevel=10"><button class="preset-btn">+ Water Barracks Lvl 10</button></a>
+                <a href="/add?location=Lava&name=Barracks&targetLevel=10"><button class="preset-btn">+ Lava Barracks Lvl 10</button></a>
+                <a href="/add?location=Main&name=House&targetLevel=11"><button class="preset-btn">+ Main House Lvl 11</button></a>
               </div>
             </div>
           </div>
@@ -152,7 +168,7 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Add Task via URL parameter or form submit
+// Add Task
 app.get('/add', (req, res) => {
   const location = req.query.location;
   const name = req.query.name || 'Building';
@@ -176,7 +192,7 @@ app.get('/remove', (req, res) => {
   res.redirect('/');
 });
 
-// Clear Entire Queue
+// Clear Queue
 app.get('/clear', (req, res) => {
   state.pendingBuilds = [];
   console.log('[CONTROL PANEL] Cleared all pending queue targets.');
@@ -191,82 +207,51 @@ app.listen(PORT, '0.0.0.0', () => {
 // 2. BROWSER DOM SCRAPERS
 // ==========================================
 
-function ensureOpenAndScrapeQueue() {
-  const container = document.querySelector('.constructionItemList');
-  const openBtn = document.querySelector('#OpenBar');
+function scrapeCitySlots(imageMap) {
+  const slots = document.querySelectorAll('button.buildingSlot');
+  const cityState = [];
 
-  if (!container || container.offsetParent === null) {
-    if (openBtn) {
-      openBtn.click();
-    } else {
-      return null;
-    }
-  }
+  slots.forEach((slot) => {
+    const slotId = slot.id;
+    const levelSpan = slot.querySelector('span');
+    const currentLevel = levelSpan ? parseInt(levelSpan.textContent.trim(), 10) : 0;
+    const styleBg = slot.style.backgroundImage || '';
+    const isBuilding = slot.getAttribute('data-timer-lock') === '1' || styleBg.includes('Building.gif');
 
-  const activeContainer = document.querySelector('.constructionItemList');
-  if (!activeContainer) return [];
-
-  const items = activeContainer.querySelectorAll('.constructionItem');
-  const activeQueue = [];
-
-  items.forEach((item) => {
-    const nameEl = item.querySelector('.itemName');
-    const quantityEl = item.querySelector('.itemQuantity');
-    const timerEl = item.querySelector('#timer');
-    const locationEl = item.querySelector('.buildTimerLocation');
-    const speedUpEl = item.querySelector('.speedUpIcon');
-    const progressBar = item.querySelector('#time-left');
-
-    let rawTimeText = '';
-    if (timerEl) {
-      const clone = timerEl.cloneNode(true);
-      const locSpan = clone.querySelector('.buildTimerLocation');
-      if (locSpan) locSpan.remove();
-      rawTimeText = clone.textContent.replace(/Time Left:\s*/i, '').trim();
+    let detectedName = 'Unknown';
+    for (const [key, val] of Object.entries(imageMap)) {
+      if (styleBg.toLowerCase().includes(key)) {
+        detectedName = val;
+        break;
+      }
     }
 
-    activeQueue.push({
-      name: nameEl ? nameEl.textContent.trim() : 'Unknown',
-      level: quantityEl ? parseInt(quantityEl.textContent.trim(), 10) : 0,
-      location: locationEl ? locationEl.textContent.trim() : 'Main',
-      timeLeft: rawTimeText,
-      speedUpType: speedUpEl ? speedUpEl.getAttribute('data-speedup-type') : null,
-      progressPercent: progressBar ? parseFloat(progressBar.style.width) : 0
+    cityState.push({
+      id: slotId,
+      name: detectedName,
+      level: currentLevel,
+      isBuilding: isBuilding
     });
   });
 
-  return activeQueue;
+  return cityState;
 }
 
 // ==========================================
 // 3. QUEUE LOGIC & POLLING ENGINE
 // ==========================================
 
-function isCityBusy(activeQueue, locationName) {
-  return activeQueue.some(
-    (item) => item.location.toLowerCase() === locationName.toLowerCase()
-  );
-}
-
-/**
- * Enhanced frame resolver that checks all active frames and sub-frames for game elements
- */
 async function getGameFrame(page) {
-  // Check main page first
   try {
-    const mainHasBtn = await page.evaluate(() => !!(document.querySelector('#OpenBar') || document.querySelector('.constructionItemList')));
+    const mainHasBtn = await page.evaluate(() => !!(document.querySelector('.buildingSlot') || document.querySelector('#OpenBar')));
     if (mainHasBtn) return page;
   } catch (e) {}
 
-  // Iterate over all iframe contexts
-  const frames = page.frames();
-  for (const frame of frames) {
+  for (const frame of page.frames()) {
     try {
-      const frameHasBtn = await frame.evaluate(() => !!(document.querySelector('#OpenBar') || document.querySelector('.constructionItemList')));
+      const frameHasBtn = await frame.evaluate(() => !!(document.querySelector('.buildingSlot') || document.querySelector('#OpenBar')));
       if (frameHasBtn) return frame;
-    } catch (e) {
-      // Ignore cross-origin context restriction warnings
-    }
+    } catch (e) {}
   }
 
   return null;
@@ -278,57 +263,35 @@ async function processQueueLoop() {
 
   try {
     if (state.page.isClosed()) {
-      throw new Error('Page context closed. Re-initializing...');
+      throw new Error('Page context closed.');
     }
 
     const targetContext = await getGameFrame(state.page);
 
     if (!targetContext) {
-      console.log('[BOT] Waiting for #OpenBar construction button in DOM (scanned ' + state.page.frames().length + ' frames)...');
+      console.log('[BOT] Searching frame tree for city slots / #OpenBar...');
       return;
     }
 
-    const activeQueue = await targetContext.evaluate(ensureOpenAndScrapeQueue);
+    const slotsData = await targetContext.evaluate(scrapeCitySlots, IMAGE_MAP);
 
-    if (activeQueue === null) {
-      console.log('[BOT] Construction panel UI elements not ready yet.');
+    if (!slotsData || slotsData.length === 0) {
+      console.log('[BOT] City DOM slots not fully loaded yet...');
       return;
     }
 
-    console.log(`[BOT] Active construction jobs running (${activeQueue.length}):`);
-    activeQueue.forEach((job) => {
-      console.log(`  - [${job.location}] ${job.name} Lvl ${job.level} (${job.timeLeft} left)`);
-    });
+    const activeUpgrades = slotsData.filter(s => s.isBuilding);
+    console.log(`[BOT] Scanned ${slotsData.length} slots. Active construction in progress: ${activeUpgrades.length}`);
 
-    for (let i = state.pendingBuilds.length - 1; i >= 0; i--) {
-      const task = state.pendingBuilds[i];
-
-      if (!isCityBusy(activeQueue, task.location)) {
-        console.log(`[BOT] Open construction slot detected in [${task.location}]!`);
-        
-        await targetContext.evaluate((buildTask) => {
-          console.log(`[Game Context] Triggering build for ${buildTask.name} in ${buildTask.location}`);
-          // In-game click or modal execution logic goes here
-        }, task);
-
-        state.pendingBuilds.splice(i, 1);
-      } else {
-        console.log(`[BOT] Location [${task.location}] busy. Waiting for slot...`);
-      }
-    }
   } catch (err) {
-    console.error('[BOT] Error in processing cycle:', err.message);
-    if (err.message.includes('closed') || err.message.includes('Target closed') || err.message.includes('Execution context')) {
-      console.log('[BOT] Connection dropped. Reconnecting...');
-      await handleReconnect();
-    }
+    console.error('[BOT] Polling error:', err.message);
   } finally {
     state.isProcessing = false;
   }
 }
 
 // ==========================================
-// 4. LIFECYCLE & RECONNECT
+// 4. LIFECYCLE INITIALIZATION
 // ==========================================
 
 async function initializeBot() {
@@ -342,8 +305,7 @@ async function initializeBot() {
       '--disable-dev-shm-usage',
       '--disable-accelerated-2d-canvas',
       '--disable-gpu',
-      '--disable-web-security', // Helps Puppeteer access nested game iframes
-      '--allow-running-insecure-content'
+      '--disable-web-security'
     ]
   });
 
@@ -362,27 +324,8 @@ async function initializeBot() {
   setInterval(processQueueLoop, CONFIG.pollIntervalMs);
 }
 
-async function handleReconnect() {
-  try {
-    if (state.browser) {
-      await state.browser.close().catch(() => {});
-    }
-  } catch (e) {}
-
-  console.log('[BOT] Restarting bot instance in 10 seconds...');
-  setTimeout(() => {
-    initializeBot().catch((err) => {
-      console.error('[BOT] Reconnection failed:', err.message);
-    });
-  }, 10000);
-}
-
-process.on('unhandledRejection', (reason) => {
-  console.error('[BOT] Unhandled Promise Rejection:', reason);
-});
-
 // Launch Bot
 initializeBot().catch((err) => {
-  console.error('[BOT] Fatal startup error:', err);
+  console.error('[BOT] Startup error:', err);
   process.exit(1);
 });
