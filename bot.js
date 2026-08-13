@@ -12,6 +12,7 @@ const puppeteer = require('puppeteer');
 const PORT = process.env.PORT || 10000;
 const CONFIG = {
   gameUrl: 'https://www.dragonsofcamelot.com/Great.html',
+  loginUrl: 'https://www.dragonsofcamelot.com/index.html',
   pollIntervalMs: 5000
 };
 
@@ -37,6 +38,7 @@ const BUILDINGS = [
   'Stone Dragon Keep', 'Lava Dragon Keep'
 ];
 
+// Map image filenames to human-readable building names
 const IMAGE_MAP = {
   'barracks': 'Barracks',
   'house': 'House',
@@ -262,7 +264,7 @@ function scrapeCitySlots(imageMap) {
 async function getGameFrame(page) {
   const frames = page.frames();
 
-  // Check main page
+  // Check main page context
   try {
     const mainHasBtn = await page.evaluate(() => 
       !!(document.querySelector('.buildingSlot') || document.querySelector('.city-select'))
@@ -282,10 +284,12 @@ async function getGameFrame(page) {
     } catch (e) {}
   }
 
-  // Diagnostic log showing current URL and Frame URLs
   const currentUrl = page.url();
-  const frameUrls = frames.map(f => f.url()).join(', ');
-  console.log(`[BOT] Searching frame tree (${frames.length} frames). Current Page URL: "${currentUrl}". Frame URLs: [${frameUrls}]`);
+  if (currentUrl.includes('index.html')) {
+    console.warn(`[BOT WARNING] Redirected to login page (${currentUrl}). Authentication required.`);
+  } else {
+    console.log(`[BOT] Searching frame tree (${frames.length} frames). Current URL: "${currentUrl}"`);
+  }
   
   return null;
 }
@@ -312,7 +316,7 @@ async function processQueueLoop() {
       const owned = cityOverview.filter(c => c.isOwned).map(c => c.id.replace('City', ''));
       const activeBuildingCities = cityOverview.filter(c => c.isBuildingBusy).map(c => c.id.replace('City', ''));
       
-      console.log(`[BOT] Hooked successfully! Owned Cities (${owned.length}): ${owned.join(', ')}`);
+      console.log(`[BOT] Connected to Game DOM! Owned Cities (${owned.length}): ${owned.join(', ')}`);
       if (activeBuildingCities.length > 0) {
         console.log(`[BOT] Cities with active construction: ${activeBuildingCities.join(', ')}`);
       }
@@ -320,7 +324,7 @@ async function processQueueLoop() {
 
     if (slotsData && slotsData.length > 0) {
       const activeUpgrades = slotsData.filter(s => s.isBuilding);
-      console.log(`[BOT] Scanned current city view (${slotsData.length} slots). Upgrades active in this view: ${activeUpgrades.length}`);
+      console.log(`[BOT] Scanned current city view (${slotsData.length} slots). Active upgrades: ${activeUpgrades.length}`);
     }
 
   } catch (err) {
@@ -331,8 +335,54 @@ async function processQueueLoop() {
 }
 
 // ==========================================
-// 4. LIFECYCLE INITIALIZATION
+// 4. AUTOMATED LOGIN & INITIALIZATION
 // ==========================================
+
+async function performLogin(page) {
+  const email = process.env.DOC_EMAIL;
+  const password = process.env.DOC_PASSWORD;
+
+  if (!email || !password) {
+    console.error('[BOT ERROR] Missing DOC_EMAIL or DOC_PASSWORD environment variables in Render!');
+    return false;
+  }
+
+  console.log('[BOT] Executing login on index.html...');
+
+  try {
+    const emailSelector = 'input[type="email"], input[name="email"], input[name="username"], #email';
+    const passwordSelector = 'input[type="password"], input[name="password"], #password';
+    const submitSelector = 'button[type="submit"], input[type="submit"], .login-btn, #login_button';
+
+    // Wait for form inputs to render
+    await page.waitForSelector(emailSelector, { timeout: 15000 });
+    
+    // Type credentials
+    await page.type(emailSelector, email);
+    await page.type(passwordSelector, password);
+
+    console.log('[BOT] Submitting login form...');
+    
+    // Click submit and wait for navigation
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
+      page.click(submitSelector)
+    ]);
+
+    console.log(`[BOT] Login submitted. Current URL: ${page.url()}`);
+
+    // If login didn't auto-redirect to Great.html, navigate there manually
+    if (!page.url().includes('Great.html')) {
+      console.log('[BOT] Post-login redirect pending. Navigating to Great.html directly...');
+      await page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 90000 });
+    }
+
+    return true;
+  } catch (err) {
+    console.error('[BOT ERROR] Failed during form login sequence:', err.message);
+    return false;
+  }
+}
 
 async function initializeBot() {
   console.log('[BOT] Launching headless browser...');
@@ -355,14 +405,24 @@ async function initializeBot() {
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   );
 
-  // Monitor frame additions dynamically
   state.page.on('frameattached', frame => console.log(`[BOT] Frame attached: ${frame.url()}`));
   state.page.on('framenavigated', frame => console.log(`[BOT] Frame navigated: ${frame.url()}`));
 
-  console.log('[BOT] Navigating to game...');
+  console.log('[BOT] Navigating to game landing page...');
   await state.page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 90000 });
 
-  console.log('[BOT] Initial load complete. Entering polling loop...');
+  // Give client-side JS redirects a 3-second window to settle on index.html
+  await new Promise(resolve => setTimeout(resolve, 3000));
+
+  const finalUrl = state.page.url();
+  console.log(`[BOT] Page URL after load settlement: "${finalUrl}"`);
+
+  if (finalUrl.includes('index.html')) {
+    console.log('[BOT] Unauthenticated session detected. Triggering automated login flow...');
+    await performLogin(state.page);
+  }
+
+  console.log('[BOT] Setup complete. Entering main polling loop...');
   setInterval(processQueueLoop, CONFIG.pollIntervalMs);
 }
 
