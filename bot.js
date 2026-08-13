@@ -283,7 +283,6 @@ function scrapeCitySlots(imageMap) {
     if (timerElem && timerElem.textContent.trim()) {
       timeLeft = timerElem.textContent.trim();
     } else {
-      // Fallback: check global building progress bar/overlay if present in the slot
       const altTimer = slot.querySelector('div span, p');
       if (altTimer && /\d{1,2}:\d{2}/.test(altTimer.textContent)) {
         timeLeft = altTimer.textContent.trim();
@@ -293,7 +292,6 @@ function scrapeCitySlots(imageMap) {
     // 3. Resolve human-readable building name
     let detectedName = isEmpty ? 'Empty Slot' : 'Building';
     
-    // Check background image matching first
     for (const [key, val] of Object.entries(imageMap)) {
       if (styleBg.includes(key.toLowerCase())) {
         detectedName = val;
@@ -301,7 +299,6 @@ function scrapeCitySlots(imageMap) {
       }
     }
 
-    // Fallback: Check title or tooltip attributes if background mapping failed
     if (detectedName === 'Building' || detectedName === 'Under Construction') {
       const tooltip = slot.getAttribute('title') || slot.getAttribute('data-title') || slot.getAttribute('aria-label');
       if (tooltip) {
@@ -406,7 +403,7 @@ async function performLogin(page) {
     return false;
   }
 
-  console.log('[BOT] Executing login flow on index.html...');
+  console.log(`[BOT] Logging into account: ${email}`);
 
   try {
     const modalTriggerSelector = 'button[popovertarget="login-modal-wrapper"], button.login-button';
@@ -421,26 +418,31 @@ async function performLogin(page) {
 
     await page.waitForSelector(emailSelector, { visible: true, timeout: 10000 });
 
-    await page.click(emailSelector);
+    // Clear fields and enter credentials
+    await page.click(emailSelector, { clickCount: 3 });
     await page.type(emailSelector, email, { delay: 50 });
 
-    await page.click(passwordSelector);
+    await page.click(passwordSelector, { clickCount: 3 });
     await page.type(passwordSelector, password, { delay: 50 });
 
-    console.log('[BOT] Submitting credentials...');
-    
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {}),
-      page.click(submitBtnSelector)
-    ]);
+    console.log('[BOT] Submitting credentials (#pain1)...');
+    await page.click(submitBtnSelector);
 
-    console.log('[BOT] Navigating to Great.html...');
+    // Wait 5 seconds for the AJAX request to return account cookies
+    console.log('[BOT] Authenticating session...');
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+    // Force navigation to game world carrying account session cookies
+    console.log('[BOT] Loading account world (Great.html)...');
     await page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 90000 });
 
     await new Promise(resolve => setTimeout(resolve, 3000));
-    return !page.url().includes('index.html');
+    const currentUrl = page.url();
+    console.log(`[BOT] Account session active on URL: ${currentUrl}`);
+
+    return !currentUrl.includes('index.html');
   } catch (err) {
-    console.error('[BOT ERROR] Failed during form login sequence:', err.message);
+    console.error('[BOT ERROR] Failed during account login sequence:', err.message);
     return false;
   }
 }
