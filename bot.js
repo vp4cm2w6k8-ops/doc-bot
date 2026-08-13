@@ -158,13 +158,26 @@ app.listen(PORT, () => console.log(`[HTTP SERVER] Control Dashboard live on port
 // --- HELPER FUNCTIONS ---
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Multi-heuristic game frame detection
 async function getGameFrame(page) {
-    for (const frame of page.frames()) {
+    const frames = page.frames();
+    
+    for (const frame of frames) {
         try {
-            const hasSeed = await frame.evaluate(() => typeof window.seed !== 'undefined' || typeof window.Modal !== 'undefined');
-            if (hasSeed) return frame;
+            const isGame = await frame.evaluate(() => {
+                const hasSeed = typeof window.seed !== 'undefined';
+                const hasModal = typeof window.Modal !== 'undefined';
+                const hasGameCanvas = !!document.querySelector('#game_frame, #main_frame, embed, object, canvas, iframe[src*="game"]');
+                const hasGameUI = !!document.querySelector('#TimeContainer, #cityView, .buildingTile');
+                
+                return hasSeed || hasModal || hasGameCanvas || hasGameUI;
+            });
+
+            if (isGame) {
+                return frame;
+            }
         } catch (e) {
-            // Ignore cross-origin errors
+            // Ignore cross-origin context restrictions
         }
     }
     return null;
@@ -172,7 +185,6 @@ async function getGameFrame(page) {
 
 // Scans for the login button first, triggers it, then fills credentials across frames
 async function findAndFillLogin(page, username, password) {
-    // 1. Target and click the initial "Login" or "Sign In" button on the portal
     try {
         const clickedTrigger = await page.evaluate(() => {
             const explicitSelectors = ['#login-btn', '.login-btn', '#btn-login', 'a[href*="login"]', 'button[class*="login"]', '.sign-in', '#sign-in'];
@@ -184,7 +196,6 @@ async function findAndFillLogin(page, username, password) {
                 }
             }
 
-            // Fallback: search visible elements for login text
             const elements = Array.from(document.querySelectorAll('a, button, div, span')).filter(el => el.offsetWidth > 0);
             const loginBtn = elements.find(el => {
                 const txt = (el.innerText || '').trim().toLowerCase();
@@ -203,10 +214,9 @@ async function findAndFillLogin(page, username, password) {
             await sleep(2000);
         }
     } catch (e) {
-        // Continue to scanning if clicking fails
+        // Continue scanning if clicking fails
     }
 
-    // 2. Scan frames for form inputs
     const emailSelectors = ['#login-email', '#email', 'input[type="email"]', 'input[name="username"]', 'input[name="email"]', '#username'];
     const passSelectors = ['#login-password', '#password', 'input[type="password"]', 'input[name="password"]'];
 
@@ -250,7 +260,7 @@ async function findAndFillLogin(page, username, password) {
 
             if (filled) return true;
         } catch (e) {
-            // Ignore cross-origin context errors
+            // Ignore cross-origin errors
         }
     }
     return false;
@@ -339,14 +349,12 @@ async function startQueueBot() {
         console.log('[BOT] Navigating to game portal...');
         await page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2' });
 
-        // Multi-frame, multi-selector login attempt
         let loggedIn = false;
         for (let i = 0; i < 5; i++) {
             console.log(`[BOT] Scanning for login button and form (Attempt ${i + 1}/5)...`);
             loggedIn = await findAndFillLogin(page, CONFIG.username, CONFIG.password);
             if (loggedIn) {
                 console.log('[BOT] Login form found and submitted!');
-                await sleep(5000);
                 break;
             }
             await sleep(2000);
@@ -356,20 +364,26 @@ async function startQueueBot() {
             console.log('[BOT] Login form not found or session already active. Proceeding to game frame check...');
         }
 
-        console.log('[BOT] Waiting for Game Frame initialization...');
+        console.log('[BOT] Waiting for post-login redirect and Game Frame initialization...');
+        await sleep(8000);
+
         let targetFrame = null;
-        for (let i = 0; i < 15; i++) {
+        for (let i = 0; i < 20; i++) {
+            console.log(`[BOT] Polling for Game Frame (Attempt ${i + 1}/20)...`);
             targetFrame = await getGameFrame(page);
-            if (targetFrame) break;
+            if (targetFrame) {
+                console.log(`[BOT] Game context hooked successfully! (URL: ${targetFrame.url()})`);
+                break;
+            }
             await sleep(3000);
         }
 
         if (!targetFrame) {
-            console.error('[BOT ERROR] Could not locate active game iframe context.');
-            return;
+            console.log('[BOT WARNING] Could not isolate subframe. Falling back to main page context.');
+            targetFrame = page.mainFrame();
         }
 
-        console.log('[BOT] Game context hooked successfully.');
+        console.log('[BOT] Entering main queue polling loop...');
 
         while (true) {
             activeStatus.lastCheck = new Date().toLocaleTimeString();
