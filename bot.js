@@ -23,21 +23,71 @@ const state = {
 };
 
 // ==========================================
-// 1. EXPRESS HTTP SERVER (Required by Render)
+// 1. EXPRESS HTTP SERVER & WEB LINK API
 // ==========================================
 const app = express();
 app.use(express.json());
 
-// Status Health Check
+// Main Status Health Check Page
 app.get('/', (req, res) => {
-  res.json({
-    status: 'online',
-    pendingQueueLength: state.pendingBuilds.length,
-    pendingBuilds: state.pendingBuilds
-  });
+  let pendingListHtml = state.pendingBuilds.length === 0 
+    ? '<em>No pending tasks queued</em>'
+    : state.pendingBuilds.map((b, i) => `<li><strong>#${i+1}</strong>: [${b.location}] ${b.name} Lvl ${b.targetLevel}</li>`).join('');
+
+  res.send(`
+    <html>
+      <head><title>DoC Queue Bot</title></head>
+      <body style="font-family: Arial, sans-serif; padding: 20px; background: #121212; color: #e0e0e0;">
+        <h2 style="color: #4CAF50;">Bot Status: Online</h2>
+        <p><strong>Pending Tasks Count:</strong> ${state.pendingBuilds.length}</p>
+        <h3>Pending Build Queue:</h3>
+        <ul>${pendingListHtml}</ul>
+        <hr style="border-color: #333;" />
+        <h4>Quick Link Quick-Start Format:</h4>
+        <code>/add?location=Water&name=Camp&targetLevel=10</code>
+      </body>
+    </html>
+  `);
 });
 
-// Endpoint to push new build commands into the bot's queue dynamically
+// GET Endpoint: Add build tasks directly via browser URL/link
+// Example: https://your-app-name.onrender.com/add?location=Water&name=Camp&targetLevel=10
+app.get('/add', (req, res) => {
+  const location = req.query.location;
+  const name = req.query.name || 'Building';
+  const targetLevel = parseInt(req.query.targetLevel, 10) || 1;
+
+  if (!location) {
+    return res.status(400).send(`
+      <body style="font-family: sans-serif; padding: 20px; background: #121212; color: #ff5252;">
+        <h2>Error: Missing location parameter</h2>
+        <p>Example link: <code>/add?location=Water&name=Camp&targetLevel=10</code></p>
+      </body>
+    `);
+  }
+
+  // Add task to state queue
+  state.pendingBuilds.push({ location, name, targetLevel });
+  console.log(`[URL API] Added task: ${name} Lvl ${targetLevel} in [${location}]`);
+
+  // Confirmation response page
+  res.send(`
+    <html>
+      <body style="font-family: Arial, sans-serif; padding: 20px; background: #121212; color: #ffffff;">
+        <h2 style="color: #4CAF50;">Task Added to Queue!</h2>
+        <ul style="line-height: 1.6;">
+          <li><strong>Location:</strong> ${location}</li>
+          <li><strong>Building:</strong> ${name}</li>
+          <li><strong>Target Level:</strong> ${targetLevel}</li>
+        </ul>
+        <p>Total Tasks Pending: <strong>${state.pendingBuilds.length}</strong></p>
+        <p><a href="/" style="color: #64B5F6; text-decoration: none;">View Status Page</a></p>
+      </body>
+    </html>
+  `);
+});
+
+// POST Endpoint: Add build tasks via JSON payload
 app.post('/add-build', (req, res) => {
   const { location, name, targetLevel } = req.body;
   if (!location || !name || !targetLevel) {
@@ -45,7 +95,7 @@ app.post('/add-build', (req, res) => {
   }
 
   state.pendingBuilds.push({ location, name, targetLevel });
-  console.log(`[HTTP API] Added target: ${name} (Lvl ${targetLevel}) at ${location}`);
+  console.log(`[HTTP API] Added target: ${name} (Lvl ${targetLevel}) at [${location}]`);
   
   return res.json({
     success: true,
@@ -63,23 +113,21 @@ app.listen(PORT, '0.0.0.0', () => {
 // ==========================================
 
 /**
- * Ensures the construction list panel is open by clicking #OpenBar if needed,
- * then scrapes the construction items.
+ * Ensures the construction list panel is expanded (#OpenBar),
+ * then scrapes active queue items.
  */
 function ensureOpenAndScrapeQueue() {
   const container = document.querySelector('.constructionItemList');
   const openBtn = document.querySelector('#OpenBar');
 
-  // If the list isn't visible, try clicking the construction button
   if (!container || container.offsetParent === null) {
     if (openBtn) {
       openBtn.click();
     } else {
-      return null; // Neither button nor container found in this frame
+      return null;
     }
   }
 
-  // Re-fetch container in case it rendered immediately after click
   const activeContainer = document.querySelector('.constructionItemList');
   if (!activeContainer) return [];
 
@@ -116,7 +164,7 @@ function ensureOpenAndScrapeQueue() {
 }
 
 // ==========================================
-// 3. QUEUE LOGIC & ENGINE
+// 3. QUEUE LOGIC & POLLING ENGINE
 // ==========================================
 
 function isCityBusy(activeQueue, locationName) {
@@ -125,21 +173,16 @@ function isCityBusy(activeQueue, locationName) {
   );
 }
 
-/**
- * Finds the frame containing either #OpenBar or .constructionItemList
- */
 async function getGameFrame(page) {
-  // Check main page first
   const mainHasBtn = await page.evaluate(() => !!(document.querySelector('#OpenBar') || document.querySelector('.constructionItemList')));
   if (mainHasBtn) return page;
 
-  // Search child frames/iframes
   for (const frame of page.frames()) {
     try {
       const frameHasBtn = await frame.evaluate(() => !!(document.querySelector('#OpenBar') || document.querySelector('.constructionItemList')));
       if (frameHasBtn) return frame;
     } catch (e) {
-      // Ignore cross-origin frame access errors
+      // Cross-origin frame access safety catch
     }
   }
 
@@ -155,7 +198,6 @@ async function processQueueLoop() {
       throw new Error('Page context closed. Re-initializing...');
     }
 
-    // Locate frame containing the build button / construction list
     const targetContext = await getGameFrame(state.page);
 
     if (!targetContext) {
@@ -163,7 +205,6 @@ async function processQueueLoop() {
       return;
     }
 
-    // Open panel (if closed) and scrape live queue
     const activeQueue = await targetContext.evaluate(ensureOpenAndScrapeQueue);
 
     if (activeQueue === null) {
@@ -176,23 +217,20 @@ async function processQueueLoop() {
       console.log(`  - [${job.location}] ${job.name} Lvl ${job.level} (${job.timeLeft} left)`);
     });
 
-    // Process pending tasks against free locations
     for (let i = state.pendingBuilds.length - 1; i >= 0; i--) {
       const task = state.pendingBuilds[i];
 
       if (!isCityBusy(activeQueue, task.location)) {
         console.log(`[BOT] Open construction slot detected in [${task.location}]!`);
         
-        // Execute build step inside target frame context
         await targetContext.evaluate((buildTask) => {
           console.log(`[Game Context] Triggering build for ${buildTask.name} in ${buildTask.location}`);
-          // In-game modal trigger or click interaction logic
+          // In-game click or modal execution logic goes here
         }, task);
 
-        // Remove from pending queue
         state.pendingBuilds.splice(i, 1);
       } else {
-        console.log(`[BOT] Location [${task.location}] busy. Queue waiting.`);
+        console.log(`[BOT] Location [${task.location}] busy. Waiting for slot...`);
       }
     }
   } catch (err) {
