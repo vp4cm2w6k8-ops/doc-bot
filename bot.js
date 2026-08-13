@@ -1,18 +1,40 @@
 /**
- * Dragons of Camelot - Render Node.js Bot Core
+ * Dragons of Camelot - Complete Headless Bot & Queue Manager
+ * Target Environment: Node.js (Render / Linux Server)
  */
+
 const puppeteer = require('puppeteer');
 
-// Config and State
-const POLL_INTERVAL_MS = 5000;
-let pendingBuilds = [
-  // Example queued targets:
-  // { location: 'Water', name: 'Camp', targetLevel: 10 }
-];
+// ==========================================
+// CONFIGURATION & GLOBAL STATE
+// ==========================================
+const CONFIG = {
+  gameUrl: 'https://www.dragonsofcamelot.com/Great.html',
+  pollIntervalMs: 5000,
+  maxLoginAttempts: 5,
+  maxFrameAttempts: 20,
+};
+
+// Queue state managed on the Node side
+const state = {
+  browser: null,
+  page: null,
+  isProcessing: false,
+  pendingBuilds: [
+    // Example items in your build queue:
+    // { location: 'Main', name: 'Keep', targetLevel: 10 },
+    // { location: 'Water', name: 'Camp', targetLevel: 10 },
+    // { location: 'Lava', name: 'Camp', targetLevel: 10 }
+  ]
+};
+
+// ==========================================
+// BROWSER DOM SCRAPERS (Run inside browser)
+// ==========================================
 
 /**
- * Browser-side function to scrape the DOM.
- * Executed inside Puppeteer's page context.
+ * Scrapes all active construction items directly from the DOM.
+ * Passed into page.evaluate().
  */
 function scrapeActiveConstructionQueue() {
   const container = document.querySelector('.constructionItemList');
@@ -29,6 +51,7 @@ function scrapeActiveConstructionQueue() {
     const speedUpEl = item.querySelector('.speedUpIcon');
     const progressBar = item.querySelector('#time-left');
 
+    // Isolate timer text by cloning node and removing location span
     let rawTimeText = '';
     if (timerEl) {
       const clone = timerEl.cloneNode(true);
@@ -50,8 +73,12 @@ function scrapeActiveConstructionQueue() {
   return activeQueue;
 }
 
+// ==========================================
+// QUEUE LOGIC (Node.js Side)
+// ==========================================
+
 /**
- * Checks if a specific location is currently building
+ * Checks if a specific location currently has an active construction item running
  */
 function isCityBusy(activeQueue, locationName) {
   return activeQueue.some(
@@ -60,56 +87,134 @@ function isCityBusy(activeQueue, locationName) {
 }
 
 /**
- * Main Puppeteer Bot Runner
+ * Dispatches a build task into the page context
  */
-async function startBot() {
-  console.log('[BOT] Launching headless browser...');
+async function executeBuild(page, task) {
+  console.log(`[BOT] Executing build: ${task.name} Lvl ${task.targetLevel} in ${task.location}...`);
   
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox'] // Required for Render environments
-  });
-
-  const page = await browser.newPage();
-
-  // 1. Navigate and Hook Game Context
-  console.log('[BOT] Navigating to game...');
-  await page.goto('https://www.dragonsofcamelot.com/Great.html', { waitUntil: 'networkidle2' });
-
-  // 2. Queue Engine Polling Loop
-  setInterval(async () => {
-    try {
-      // Evaluate DOM scraper directly inside browser page
-      const activeQueue = await page.evaluate(scrapeActiveConstructionQueue);
-      console.log(`[BOT] Active jobs running: ${activeQueue.length}`, activeQueue);
-
-      // Process pending queue against active busy cities
-      for (let i = pendingBuilds.length - 1; i >= 0; i--) {
-        const task = pendingBuilds[i];
-
-        if (!isCityBusy(activeQueue, task.location)) {
-          console.log(`[BOT] Open slot detected in ${task.location}! Dispatching build: ${task.name}`);
-          
-          // Execute trigger in page context if slot open
-          await page.evaluate((buildTask) => {
-            console.log(`[Browser Context] Starting build for ${buildTask.name} in ${buildTask.location}`);
-            // Fire in-game build click or API call here
-          }, task);
-
-          // Remove completed task assignment
-          pendingBuilds.splice(i, 1);
-        } else {
-          console.log(`[BOT] ${task.location} is busy. Waiting...`);
-        }
-      }
-    } catch (err) {
-      console.error('[BOT] Error during queue polling cycle:', err.message);
-    }
-  }, POLL_INTERVAL_MS);
+  try {
+    await page.evaluate((buildTask) => {
+      // In-game build execution logic or modal interactions go here
+      console.log(`[Game Context] Initiating build for ${buildTask.name} at ${buildTask.location}`);
+    }, task);
+  } catch (err) {
+    console.error(`[BOT] Failed to execute build for ${task.location}:`, err.message);
+  }
 }
 
-// Start Node.js service
-startBot().catch((err) => {
+/**
+ * Main polling engine loop
+ */
+async function processQueueLoop() {
+  if (state.isProcessing || !state.page) return;
+  state.isProcessing = true;
+
+  try {
+    // 1. Check if page context is still valid
+    if (state.page.isClosed()) {
+      throw new Error('Page context closed. Re-initializing...');
+    }
+
+    // 2. Scrape live active queue from DOM
+    const activeQueue = await state.page.evaluate(scrapeActiveConstructionQueue);
+    console.log(`[BOT] Active construction jobs running (${activeQueue.length}):`);
+    activeQueue.forEach((job) => {
+      console.log(`  - [${job.location}] ${job.name} Lvl ${job.level} (${job.timeLeft} left)`);
+    });
+
+    // 3. Process pending builds against current city statuses
+    for (let i = state.pendingBuilds.length - 1; i >= 0; i--) {
+      const task = state.pendingBuilds[i];
+
+      if (!isCityBusy(activeQueue, task.location)) {
+        console.log(`[BOT] Open construction slot detected in [${task.location}]!`);
+        await executeBuild(state.page, task);
+        
+        // Remove task from pending queue after launching
+        state.pendingBuilds.splice(i, 1);
+      } else {
+        console.log(`[BOT] Location [${task.location}] is currently busy. Queue waiting.`);
+      }
+    }
+  } catch (err) {
+    console.error('[BOT] Error in processing cycle:', err.message);
+    
+    // Auto-reconnect if session or frame context dropped
+    if (err.message.includes('closed') || err.message.includes('Target closed') || err.message.includes('Execution context')) {
+      console.log('[BOT] Connection dropped. Attempting session reconnect...');
+      await handleReconnect();
+    }
+  } finally {
+    state.isProcessing = false;
+  }
+}
+
+// ==========================================
+// SESSION & BOT LIFECYCLE
+// ==========================================
+
+async function initializeBot() {
+  console.log('[BOT] Launching headless browser...');
+  
+  state.browser = await puppeteer.launch({
+    headless: 'new',
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--disable-gpu'
+    ]
+  });
+
+  state.page = await state.browser.newPage();
+
+  // Set viewport and standard user agent
+  await state.page.setViewport({ width: 1280, height: 800 });
+  await state.page.setUserAgent(
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  );
+
+  console.log('[BOT] Navigating to game...');
+  await state.page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+
+  console.log('[BOT] Game context hooked successfully!');
+  console.log('[BOT] Entering main queue polling loop...');
+
+  // Start continuous polling loop
+  setInterval(processQueueLoop, CONFIG.pollIntervalMs);
+}
+
+async function handleReconnect() {
+  try {
+    if (state.browser) {
+      await state.browser.close().catch(() => {});
+    }
+  } catch (e) {
+    // Ignore cleanup errors
+  }
+
+  console.log('[BOT] Restarting bot instance in 10 seconds...');
+  setTimeout(() => {
+    initializeBot().catch((err) => {
+      console.error('[BOT] Reconnection failed:', err.message);
+    });
+  }, 10000);
+}
+
+// Public API helper to push targets dynamically into the bot queue
+function addTargetToQueue(location, name, targetLevel) {
+  state.pendingBuilds.push({ location, name, targetLevel });
+  console.log(`[BOT] Target added: ${name} (Lvl ${targetLevel}) in ${location}`);
+}
+
+// Global process exception safety
+process.on('unhandledRejection', (reason) => {
+  console.error('[BOT] Unhandled Promise Rejection:', reason);
+});
+
+// Start the bot
+initializeBot().catch((err) => {
   console.error('[BOT] Fatal startup error:', err);
   process.exit(1);
 });
