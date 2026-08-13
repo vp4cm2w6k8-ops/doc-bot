@@ -23,7 +23,7 @@ const state = {
 };
 
 // Game Options for Control Panel Dropdowns
-const CITIES = ['Main', 'Water', 'Lava', 'Stone', 'Chronos', 'Ice', 'Sunken', 'Wind', 'Gaia'];
+const CITIES = ['Main', 'Spectral', 'Water', 'Lava', 'Stone', 'Chronos', 'Ice', 'Sunken', 'Wind', 'Gaia'];
 const BUILDINGS = [
   'Barracks',
   'House',
@@ -39,7 +39,10 @@ const BUILDINGS = [
   'Theater',
   'Camp',
   'Garrison',
-  'Wall'
+  'Wall',
+  'Portal',
+  'Mausoleum',
+  'Spectral Keep'
 ];
 
 // Map image filenames to human-readable building names
@@ -56,6 +59,9 @@ const IMAGE_MAP = {
   'science': 'Science',
   'metal': 'Metal',
   'officer': 'Officer',
+  'portal': 'Portal',
+  'maus': 'Mausoleum',
+  'spec': 'Spectral Keep',
   'building': 'Under Construction'
 };
 
@@ -136,8 +142,8 @@ app.get('/', (req, res) => {
             <div style="margin-top:15px;">
               <span style="font-size:0.8em; color:#888;">Quick Presets:</span>
               <div class="presets">
+                <a href="/add?location=Spectral&name=Mausoleum&targetLevel=10"><button class="preset-btn">+ Spectral Mausoleum Lvl 10</button></a>
                 <a href="/add?location=Water&name=Barracks&targetLevel=10"><button class="preset-btn">+ Water Barracks Lvl 10</button></a>
-                <a href="/add?location=Lava&name=Barracks&targetLevel=10"><button class="preset-btn">+ Lava Barracks Lvl 10</button></a>
                 <a href="/add?location=Main&name=House&targetLevel=11"><button class="preset-btn">+ Main House Lvl 11</button></a>
               </div>
             </div>
@@ -214,15 +220,18 @@ function scrapeCitySlots(imageMap) {
   slots.forEach((slot) => {
     const slotId = slot.id;
     const levelSpan = slot.querySelector('span');
-    const currentLevel = levelSpan ? parseInt(levelSpan.textContent.trim(), 10) : 0;
+    const isEmpty = slot.classList.contains('emptyBuildingSlot');
+    const currentLevel = (levelSpan && !isEmpty) ? parseInt(levelSpan.textContent.trim(), 10) : 0;
     const styleBg = slot.style.backgroundImage || '';
     const isBuilding = slot.getAttribute('data-timer-lock') === '1' || styleBg.includes('Building.gif');
 
-    let detectedName = 'Unknown';
-    for (const [key, val] of Object.entries(imageMap)) {
-      if (styleBg.toLowerCase().includes(key)) {
-        detectedName = val;
-        break;
+    let detectedName = isEmpty ? 'Empty Slot' : 'Unknown';
+    if (!isEmpty) {
+      for (const [key, val] of Object.entries(imageMap)) {
+        if (styleBg.toLowerCase().includes(key)) {
+          detectedName = val;
+          break;
+        }
       }
     }
 
@@ -230,6 +239,7 @@ function scrapeCitySlots(imageMap) {
       id: slotId,
       name: detectedName,
       level: currentLevel,
+      isEmpty: isEmpty,
       isBuilding: isBuilding
     });
   });
