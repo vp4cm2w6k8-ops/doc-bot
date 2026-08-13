@@ -260,33 +260,47 @@ async function startQueueBot() {
         console.log('[BOT] Navigating to game portal...');
         await page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2' });
 
-        // --- LOGIN HANDLER FOR DRAGONSOFCAMELOT.COM MODAL ---
+        // --- ROBUST LOGIN HANDLER FOR MODAL FORM ---
         try {
             const emailSel = '#login-email';
             const passSel = '#login-password';
 
-            const emailInput = await page.$(emailSel);
-            if (emailInput) {
-                console.log('[BOT] Login modal detected. Filling credentials...');
-                
-                await emailInput.click({ clickCount: 3 });
-                await emailInput.type(CONFIG.username, { delay: 50 });
+            // Wait up to 10s for email input to be fully visible and interactable
+            await page.waitForSelector(emailSel, { visible: true, timeout: 10000 });
+            console.log('[BOT] Login modal detected and visible. Filling credentials...');
 
-                const passInput = await page.$(passSel);
-                await passInput.click({ clickCount: 3 });
-                await passInput.type(CONFIG.password, { delay: 50 });
+            // Safely set email value directly via JS + trigger change events
+            await page.evaluate((sel, user) => {
+                const el = document.querySelector(sel);
+                if (el) {
+                    el.value = user;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }, emailSel, CONFIG.username);
 
-                console.log('[BOT] Submitting login form...');
-                await Promise.all([
-                    page.click('form#login-form button[type="submit"]'),
-                    page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {})
-                ]);
-                console.log('[BOT] Login submitted successfully.');
-            } else {
-                console.log('[BOT] Login modal not visible, proceeding assuming active session.');
-            }
+            // Safely set password value directly via JS + trigger change events
+            await page.evaluate((sel, pass) => {
+                const el = document.querySelector(sel);
+                if (el) {
+                    el.value = pass;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }, passSel, CONFIG.password);
+
+            console.log('[BOT] Submitting login form...');
+            await Promise.all([
+                page.evaluate(() => {
+                    const btn = document.querySelector('form#login-form button[type="submit"]') || document.querySelector('#pain1');
+                    if (btn) btn.click();
+                }),
+                page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {})
+            ]);
+            
+            console.log('[BOT] Login submitted successfully.');
         } catch (err) {
-            console.log('[BOT] Login attempt error:', err.message);
+            console.log('[BOT] Login attempt skipped/handled:', err.message);
         }
 
         console.log('[BOT] Waiting for Game Frame initialization...');
