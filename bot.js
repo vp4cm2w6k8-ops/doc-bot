@@ -21,8 +21,7 @@ const state = {
   page: null,
   isProcessing: false,
   isLoggingIn: false,
-  pendingBuilds: [],
-  // Categorized Active Queue State
+  pendingTasks: [], // Unified Pending Queue (Builds, Training, Research)
   activeQueues: {
     construction: [],
     training: [],
@@ -46,6 +45,18 @@ const BUILDINGS = [
   'Stone Dragon Keep', 'Lava Dragon Keep'
 ];
 
+const TROOPS = [
+  'Militia', 'Swordsman', 'Scout', 'Pikeman', 'Archer',
+  'Cavalry', 'Heavy Cavalry', 'Supply Wagon', 'Ballista',
+  'Battering Ram', 'Catapult', 'Knight'
+];
+
+const RESEARCH_TECH = [
+  'Agriculture', 'Woodcraft', 'Mining', 'Alloy', 'Levitation',
+  'Medicine', 'Military Science', 'Poison', 'Fletching',
+  'Horsebreeding', 'Engineering', 'Compass', 'Metal Working'
+];
+
 // ==========================================
 // 1. EXPRESS HTTP SERVER & DASHBOARD
 // ==========================================
@@ -64,11 +75,9 @@ app.get('/debug/screenshot', async (req, res) => {
   }
 });
 
-// Raw DOM & Session Diagnostic Inspector
+// Raw DOM Inspector
 app.get('/debug/dom', async (req, res) => {
-  if (!state.page) {
-    return res.status(500).send('Puppeteer page instance not initialized.');
-  }
+  if (!state.page) return res.status(500).send('Puppeteer page instance not initialized.');
 
   try {
     const url = state.page.url();
@@ -106,7 +115,6 @@ app.get('/debug/dom', async (req, res) => {
   }
 });
 
-// Helper renderer for categorized queue tables
 function renderQueueTable(items, emptyLabel, badgeClass = 'badge-active') {
   if (!items || items.length === 0) {
     return `<tr><td colspan="4" style="text-align:center; padding:12px; color:#888;">${emptyLabel}</td></tr>`;
@@ -123,35 +131,44 @@ function renderQueueTable(items, emptyLabel, badgeClass = 'badge-active') {
   `).join('');
 }
 
-// Control Dashboard
+// Main Dashboard Interface
 app.get('/', (req, res) => {
-  const pendingRows = state.pendingBuilds.length === 0
-    ? `<tr><td colspan="5" style="text-align:center; padding:15px; color:#888;">No pending builds scheduled</td></tr>`
-    : state.pendingBuilds.map((b, i) => `
-        <tr style="border-bottom: 1px solid #333;">
-          <td style="padding:10px;">#${i + 1}</td>
-          <td style="padding:10px;"><span class="badge">${b.location}</span></td>
-          <td style="padding:10px;">${b.name}</td>
-          <td style="padding:10px;">Level ${b.targetLevel}</td>
-          <td style="padding:10px; text-align:right;">
-            <a href="/remove?index=${i}" style="color:#ff5252; text-decoration:none; font-weight:bold;">Remove</a>
-          </td>
-        </tr>
-      `).join('');
+  const pendingRows = state.pendingTasks.length === 0
+    ? `<tr><td colspan="6" style="text-align:center; padding:15px; color:#888;">No pending tasks scheduled</td></tr>`
+    : state.pendingTasks.map((t, i) => {
+        let categoryBadge = 'badge-active';
+        if (t.type === 'train') categoryBadge = 'badge-training';
+        if (t.type === 'research') categoryBadge = 'badge-research';
+
+        return `
+          <tr style="border-bottom: 1px solid #333;">
+            <td style="padding:10px;">#${i + 1}</td>
+            <td style="padding:10px;"><span class="badge ${categoryBadge}">${t.type.toUpperCase()}</span></td>
+            <td style="padding:10px;"><span class="badge">${t.location}</span></td>
+            <td style="padding:10px; font-weight:bold; color:#FFF;">${t.name}</td>
+            <td style="padding:10px;">${t.type === 'train' ? 'Qty ' + t.amount : 'Target Lvl ' + t.targetLevel}</td>
+            <td style="padding:10px; text-align:right;">
+              <a href="/remove?index=${i}" style="color:#ff5252; text-decoration:none; font-weight:bold;">Remove</a>
+            </td>
+          </tr>
+        `;
+      }).join('');
 
   const cityOptions = CITIES.map(c => `<option value="${c}">${c}</option>`).join('');
   const buildingOptions = BUILDINGS.map(b => `<option value="${b}">${b}</option>`).join('');
+  const troopOptions = TROOPS.map(t => `<option value="${t}">${t}</option>`).join('');
+  const researchOptions = RESEARCH_TECH.map(r => `<option value="${r}">${r}</option>`).join('');
 
   res.send(`
     <!DOCTYPE html>
     <html>
       <head>
-        <title>DoC Activity & Build Manager</title>
+        <title>DoC Command & Schedule Manager</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta http-equiv="refresh" content="5">
         <style>
           body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #121212; color: #e0e0e0; margin: 0; padding: 20px; }
-          .container { max-width: 900px; margin: 0 auto; }
+          .container { max-width: 950px; margin: 0 auto; }
           .card { background: #1e1e1e; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
           h2, h3 { margin-top: 0; color: #4CAF50; }
           .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 15px; }
@@ -167,23 +184,22 @@ app.get('/', (req, res) => {
           .badge-training { background: #2E7D32; color: #FFF; }
           .badge-healing { background: #C2185B; color: #FFF; }
           .badge-research { background: #7B1FA2; color: #FFF; }
-          .presets { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-          .preset-btn { width: auto; background: #333; font-size: 0.8em; padding: 6px 12px; }
           .nav-links { margin-bottom: 15px; font-size: 0.85em; }
           .nav-links a { color: #64B5F6; text-decoration: none; margin-right: 15px; }
+          .scheduler-tabs { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; }
         </style>
       </head>
       <body>
         <div class="container">
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <h2>Dragons of Camelot - Activity Control Dashboard</h2>
+            <h2>Dragons of Camelot - Control Panel</h2>
           </div>
           <div class="nav-links">
             <a href="/debug/dom" target="_blank">🔍 View Raw DOM Inspector</a>
             <a href="/debug/screenshot" target="_blank">📸 Live Browser Snapshot</a>
           </div>
 
-          <!-- CATEGORIZED ACTIVE QUEUES -->
+          <!-- ACTIVE QUEUES SECTION -->
           <div class="card" style="border-left: 4px solid #FF9800;">
             <h3 style="color:#FF9800;">🔨 Building Upgrades (${state.activeQueues.construction.length})</h3>
             <table>
@@ -223,85 +239,137 @@ app.get('/', (req, res) => {
               <tbody>${renderQueueTable(state.activeQueues.research, 'No active research in progress', 'badge-research')}</tbody>
             </table>
           </div>
-          
-          <div class="card">
-            <h3>Schedule Build Target</h3>
-            <form action="/add" method="GET">
-              <div class="grid">
-                <div>
+
+          <!-- TASK SCHEDULERS GRID -->
+          <h3 style="color:#FFF; margin-top:25px;">Schedule New Task</h3>
+          <div class="scheduler-tabs">
+            
+            <!-- 1. BUILD SCHEDULER -->
+            <div class="card" style="border-top: 3px solid #FF9800;">
+              <h3 style="color:#FF9800;">🔨 Upgrade Building</h3>
+              <form action="/add" method="GET">
+                <input type="hidden" name="type" value="build">
+                <div style="margin-bottom:10px;">
                   <label style="font-size:0.8em; color:#888;">City Location</label>
                   <select name="location">${cityOptions}</select>
                 </div>
-                <div>
+                <div style="margin-bottom:10px;">
                   <label style="font-size:0.8em; color:#888;">Building Type</label>
                   <select name="name">${buildingOptions}</select>
                 </div>
-                <div>
+                <div style="margin-bottom:15px;">
                   <label style="font-size:0.8em; color:#888;">Target Level</label>
                   <input type="number" name="targetLevel" value="10" min="1" max="20" required>
                 </div>
-              </div>
-              <button type="submit">Queue Build Command</button>
-            </form>
-
-            <div style="margin-top:15px;">
-              <span style="font-size:0.8em; color:#888;">Quick Presets:</span>
-              <div class="presets">
-                <a href="/add?location=Stone&name=Silo&targetLevel=10"><button class="preset-btn">+ Stone Silo Lvl 10</button></a>
-                <a href="/add?location=Lava&name=Camp&targetLevel=10"><button class="preset-btn">+ Lava Camp Lvl 10</button></a>
-                <a href="/add?location=Soul&name=Mausoleum&targetLevel=10"><button class="preset-btn">+ Soul Mausoleum Lvl 10</button></a>
-              </div>
+                <button type="submit" style="background:#FF9800;">+ Queue Building Upgrade</button>
+              </form>
             </div>
+
+            <!-- 2. TROOP SCHEDULER -->
+            <div class="card" style="border-top: 3px solid #4CAF50;">
+              <h3 style="color:#4CAF50;">⚔️ Train Troops</h3>
+              <form action="/add" method="GET">
+                <input type="hidden" name="type" value="train">
+                <div style="margin-bottom:10px;">
+                  <label style="font-size:0.8em; color:#888;">City Location</label>
+                  <select name="location">${cityOptions}</select>
+                </div>
+                <div style="margin-bottom:10px;">
+                  <label style="font-size:0.8em; color:#888;">Troop Type</label>
+                  <select name="name">${troopOptions}</select>
+                </div>
+                <div style="margin-bottom:15px;">
+                  <label style="font-size:0.8em; color:#888;">Quantity</label>
+                  <input type="number" name="amount" value="5000" min="1" max="100000" required>
+                </div>
+                <button type="submit" style="background:#4CAF50;">+ Queue Troop Training</button>
+              </form>
+            </div>
+
+            <!-- 3. RESEARCH SCHEDULER -->
+            <div class="card" style="border-top: 3px solid #9C27B0;">
+              <h3 style="color:#9C27B0;">🧪 Alchemy & Research</h3>
+              <form action="/add" method="GET">
+                <input type="hidden" name="type" value="research">
+                <div style="margin-bottom:10px;">
+                  <label style="font-size:0.8em; color:#888;">City Location</label>
+                  <select name="location">${cityOptions}</select>
+                </div>
+                <div style="margin-bottom:10px;">
+                  <label style="font-size:0.8em; color:#888;">Technology</label>
+                  <select name="name">${researchOptions}</select>
+                </div>
+                <div style="margin-bottom:15px;">
+                  <label style="font-size:0.8em; color:#888;">Target Level</label>
+                  <input type="number" name="targetLevel" value="10" min="1" max="20" required>
+                </div>
+                <button type="submit" style="background:#9C27B0;">+ Queue Research</button>
+              </form>
+            </div>
+
           </div>
 
+          <!-- PENDING QUEUE TABLE -->
           <div class="card">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-              <h3 style="margin:0;">Pending Build Schedule (${state.pendingBuilds.length})</h3>
-              ${state.pendingBuilds.length > 0 ? `<a href="/clear" style="text-decoration:none;"><button class="btn-danger" style="width:auto; padding:6px 12px;">Clear All</button></a>` : ''}
+              <h3 style="margin:0;">Pending Task Schedule (${state.pendingTasks.length})</h3>
+              ${state.pendingTasks.length > 0 ? `<a href="/clear" style="text-decoration:none;"><button class="btn-danger" style="width:auto; padding:6px 12px;">Clear All</button></a>` : ''}
             </div>
             <table>
               <thead>
                 <tr>
                   <th>Order</th>
+                  <th>Category</th>
                   <th>Location</th>
-                  <th>Building</th>
-                  <th>Target</th>
+                  <th>Task / Name</th>
+                  <th>Target / Amount</th>
                   <th style="text-align:right;">Action</th>
                 </tr>
               </thead>
               <tbody>${pendingRows}</tbody>
             </table>
           </div>
+
         </div>
       </body>
     </html>
   `);
 });
 
+// Endpoint to schedule any task type (build, train, research)
 app.get('/add', (req, res) => {
+  const type = req.query.type || 'build';
   const location = req.query.location;
-  const name = req.query.name || 'Building';
+  const name = req.query.name;
   const targetLevel = parseInt(req.query.targetLevel, 10) || 1;
+  const amount = parseInt(req.query.amount, 10) || 1000;
 
-  if (location) {
-    state.pendingBuilds.push({ location, name, targetLevel });
-    console.log(`[CONTROL PANEL] Added build: ${name} Lvl ${targetLevel} in [${location}]`);
+  if (location && name) {
+    const task = {
+      type,
+      location,
+      name,
+      targetLevel,
+      amount
+    };
+    state.pendingTasks.push(task);
+    console.log(`[CONTROL PANEL] Queued [${type.toUpperCase()}]: ${name} in [${location}]`);
   }
   res.redirect('/');
 });
 
 app.get('/remove', (req, res) => {
   const index = parseInt(req.query.index, 10);
-  if (!isNaN(index) && index >= 0 && index < state.pendingBuilds.length) {
-    const removed = state.pendingBuilds.splice(index, 1);
-    console.log(`[CONTROL PANEL] Removed item #${index + 1}:`, removed[0]);
+  if (!isNaN(index) && index >= 0 && index < state.pendingTasks.length) {
+    const removed = state.pendingTasks.splice(index, 1);
+    console.log(`[CONTROL PANEL] Removed task #${index + 1}:`, removed[0]);
   }
   res.redirect('/');
 });
 
 app.get('/clear', (req, res) => {
-  state.pendingBuilds = [];
-  console.log('[CONTROL PANEL] Cleared all pending queue targets.');
+  state.pendingTasks = [];
+  console.log('[CONTROL PANEL] Cleared all pending tasks.');
   res.redirect('/');
 });
 
@@ -310,7 +378,7 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 // ==========================================
-// 2. CATEGORIZED OVERLAY DRAWER SCRAPER
+// 2. OVERLAY DRAWER SCRAPER & UTILS
 // ==========================================
 
 async function ensureConstructionDrawerOpen(page) {
@@ -321,7 +389,7 @@ async function ensureConstructionDrawerOpen(page) {
       try {
         const opened = await frame.evaluate(() => {
           const drawerItems = document.querySelectorAll('.constructionItem, .queueItem, .activityItem');
-          if (drawerItems.length > 0) return true; // Already open
+          if (drawerItems.length > 0) return true;
 
           const openBtn = document.querySelector('#OpenBar, .build-btn');
           if (openBtn) {
@@ -332,9 +400,7 @@ async function ensureConstructionDrawerOpen(page) {
         });
 
         if (opened) break;
-      } catch (e) {
-        // Cross-origin frame handling
-      }
+      } catch (e) {}
     }
   } catch (err) {
     console.warn('[BOT WARNING] Error toggling activity drawer:', err.message);
@@ -352,35 +418,26 @@ function scrapeCategorizedDrawer() {
   };
 
   items.forEach((item) => {
-    // 1. Name & Type Details
     const nameNode = item.querySelector('.itemName, #itemName, .title');
     const name = nameNode ? nameNode.textContent.trim() : 'Unknown Activity';
 
-    // 2. Target Level / Quantity
     const qtyNode = item.querySelector('.itemQuantity, #itemQuantity, .amount');
     const levelOrQty = qtyNode ? parseInt(qtyNode.textContent.trim(), 10) || 0 : 0;
 
-    // 3. Location Outpost Name
     const locationNode = item.querySelector('.buildTimerLocation, .location');
     const location = locationNode ? locationNode.textContent.trim() : 'Main';
 
-    // 4. Time Left
     const timerNode = item.querySelector('#timer, .timer, .timeLeft');
     let timeLeft = 'In Progress';
 
     if (timerNode) {
       const clonedTimer = timerNode.cloneNode(true);
       const locSubNode = clonedTimer.querySelector('.buildTimerLocation, .location');
-      if (locSubNode) {
-        locSubNode.remove();
-      }
+      if (locSubNode) locSubNode.remove();
       const rawText = clonedTimer.textContent.replace('Time Left:', '').trim();
-      if (rawText) {
-        timeLeft = rawText;
-      }
+      if (rawText) timeLeft = rawText;
     }
 
-    // 5. Inspect attributes for Category Classification
     const speedUpNode = item.querySelector('[data-type], [data-speedup-type], .speedUpIcon');
     const dataType = speedUpNode ? (speedUpNode.getAttribute('data-type') || speedUpNode.getAttribute('data-speedup-type') || '').toLowerCase() : '';
     const nameLower = name.toLowerCase();
@@ -393,7 +450,6 @@ function scrapeCategorizedDrawer() {
       timeLeft
     };
 
-    // Classification Rules
     if (dataType.includes('train') || dataType.includes('troop') || nameLower.includes('militia') || nameLower.includes('archer') || nameLower.includes('knight') || nameLower.includes('wagon') || nameLower.includes('halberdier') || nameLower.includes('spy')) {
       categorized.training.push(queueObj);
     } else if (dataType.includes('heal') || dataType.includes('dragon') || nameLower.includes('dragon') || nameLower.includes('sanctuary') || nameLower.includes('heal')) {
@@ -401,7 +457,6 @@ function scrapeCategorizedDrawer() {
     } else if (dataType.includes('research') || dataType.includes('alchemy') || dataType.includes('science') || nameLower.includes('alloy') || nameLower.includes('medicine') || nameLower.includes('levitation')) {
       categorized.research.push(queueObj);
     } else {
-      // Default to construction/building upgrade
       categorized.construction.push(queueObj);
     }
   });
@@ -426,8 +481,6 @@ async function performLogin(page) {
     return false;
   }
 
-  console.log(`[DIAGNOSTIC] Initiating login flow for: ${email}`);
-
   try {
     if (!page.url().includes('index.html')) {
       await page.goto(CONFIG.loginUrl, { waitUntil: 'networkidle2', timeout: 30000 });
@@ -435,7 +488,6 @@ async function performLogin(page) {
 
     const emailVisible = await page.$('#login-email').then(el => el ? el.isVisible() : false);
     if (!emailVisible) {
-      console.log('[DIAGNOSTIC] Opening login modal via trigger click...');
       await page.evaluate(() => {
         const btn = document.querySelector('button[popovertarget="login-modal-wrapper"], button.login-button, #loginButton');
         if (btn) btn.click();
@@ -448,7 +500,6 @@ async function performLogin(page) {
     const submitBtnSelector = '#pain1';
 
     await page.waitForSelector(emailSelector, { visible: true, timeout: 15000 });
-    console.log('[DIAGNOSTIC] Login modal visible. Filling credentials...');
 
     await page.click(emailSelector, { clickCount: 3 });
     await page.type(emailSelector, email, { delay: 40 });
@@ -456,8 +507,6 @@ async function performLogin(page) {
     await page.click(passwordSelector, { clickCount: 3 });
     await page.type(passwordSelector, password, { delay: 40 });
 
-    console.log('[DIAGNOSTIC] Submitting credentials via #pain1...');
-    
     await Promise.all([
       page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {}),
       page.click(submitBtnSelector)
@@ -466,13 +515,10 @@ async function performLogin(page) {
     await new Promise(r => setTimeout(r, 3000));
 
     if (!page.url().includes('Great.html')) {
-      console.log('[DIAGNOSTIC] Navigating directly to Great.html...');
       await page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 45000 });
     }
 
     const finalUrl = page.url();
-    console.log(`[DIAGNOSTIC] Current URL post-login attempt: ${finalUrl}`);
-
     return finalUrl.includes('Great.html');
   } catch (err) {
     console.error('[DIAGNOSTIC ERROR] Login flow failed:', err.stack || err.message);
@@ -502,9 +548,7 @@ async function getGameFrame(page) {
       const frameHasTarget = await frame.evaluate(() => 
         !!(document.querySelector('#OpenBar') || document.querySelector('.constructionItem') || document.querySelector('.buildingSlot'))
       );
-      if (frameHasTarget) {
-        return frame;
-      }
+      if (frameHasTarget) return frame;
     } catch (e) {}
   }
 
@@ -516,22 +560,14 @@ async function processQueueLoop() {
   state.isProcessing = true;
 
   try {
-    if (state.page.isClosed()) {
-      throw new Error('Page context closed.');
-    }
+    if (state.page.isClosed()) throw new Error('Page context closed.');
 
     const targetContext = await getGameFrame(state.page);
+    if (!targetContext) return;
 
-    if (!targetContext) {
-      return;
-    }
-
-    // Ensure side activity drawer is toggled open
     await ensureConstructionDrawerOpen(state.page);
 
-    // Read and categorize active items from drawer
     const drawerQueues = await targetContext.evaluate(scrapeCategorizedDrawer);
-
     if (drawerQueues) {
       state.activeQueues = drawerQueues;
     }
