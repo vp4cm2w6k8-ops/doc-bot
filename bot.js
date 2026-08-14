@@ -187,7 +187,7 @@ app.get('/', (req, res) => {
             <table>
               <thead>
                 <tr>
-                  <th>City</th>
+                  <th>City / Outpost</th>
                   <th>Building</th>
                   <th>Target</th>
                   <th style="text-align:right;">Time Remaining</th>
@@ -283,63 +283,109 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 // ==========================================
-// 2. DOM SCRAPERS
+// 2. ENHANCED DOM SCRAPERS
 // ==========================================
 
 function scrapeCityStates() {
-  const container = document.querySelector('.city-select');
-  if (!container) return [];
-
-  const buttons = container.querySelectorAll('button');
   const cities = [];
 
-  buttons.forEach((btn) => {
-    const isSelected = btn.classList.contains('empire-status-selected');
-    cities.push({
-      id: btn.id,
-      cityName: btn.textContent.trim(),
-      isOwned: btn.classList.contains('city-owned'),
-      isSelected: isSelected,
-      isBuildingBusy: btn.classList.contains('empire-building-busy'),
-      isTrainingBusy: btn.classList.contains('empire-training-busy')
+  // 1. Try standard empire selection container buttons
+  const container = document.querySelector('.city-select, #city-select, .empire-city-list');
+  if (container) {
+    const buttons = container.querySelectorAll('button, a, div.city-item');
+    buttons.forEach((btn) => {
+      const isSelected = btn.classList.contains('empire-status-selected') || 
+                         btn.classList.contains('selected') || 
+                         btn.classList.contains('active');
+
+      // Extract specific city name (prevent fallback to "Home")
+      let name = btn.getAttribute('data-cityname') || 
+                 btn.getAttribute('title') || 
+                 btn.getAttribute('data-title');
+
+      if (!name) {
+        const rawText = btn.textContent.trim();
+        // Ignore generic labels like "Home" or "City"
+        if (rawText && !['home', 'city', 'cities'].includes(rawText.toLowerCase())) {
+          name = rawText;
+        } else if (btn.id) {
+          name = btn.id.replace(/^city_?|^btn_?/i, '');
+        }
+      }
+
+      if (name) {
+        cities.push({
+          id: btn.id || name,
+          cityName: name,
+          isOwned: true,
+          isSelected: isSelected
+        });
+      }
     });
-  });
+  }
+
+  // 2. Fallback: inspect top header/city title display if dropdown container is unparsed
+  if (cities.length === 0) {
+    const activeHeader = document.querySelector('#currentCityName, .current-city-title, .city-name-display');
+    if (activeHeader && activeHeader.textContent.trim()) {
+      const headerText = activeHeader.textContent.trim();
+      if (!['home', 'city'].includes(headerText.toLowerCase())) {
+        cities.push({
+          id: 'active_header_city',
+          cityName: headerText,
+          isOwned: true,
+          isSelected: true
+        });
+      }
+    }
+  }
 
   return cities;
 }
 
 function scrapeCitySlots(imageMap) {
-  const slots = document.querySelectorAll('button.buildingSlot, div.buildingSlot');
+  const slots = document.querySelectorAll('button.buildingSlot, div.buildingSlot, .building-slot');
   const cityState = [];
 
   slots.forEach((slot) => {
-    const levelSpan = slot.querySelector('span');
-    const isEmpty = slot.classList.contains('emptyBuildingSlot');
-    const currentLevel = (levelSpan && !isEmpty) ? parseInt(levelSpan.textContent.trim(), 10) : 0;
+    const levelSpan = slot.querySelector('span, .building-level, .lvl');
+    const isEmpty = slot.classList.contains('emptyBuildingSlot') || slot.classList.contains('empty');
+    const currentLevel = (levelSpan && !isEmpty) ? parseInt(levelSpan.textContent.replace(/\D/g, ''), 10) || 0 : 0;
     const styleBg = (slot.style.backgroundImage || '').toLowerCase();
-    
-    // Check for active construction indicators
+
+    // Check construction flags
     const hasTimerLock = slot.getAttribute('data-timer-lock') === '1';
-    const hasBuildingGif = styleBg.includes('building.gif');
-    const hasProgressClass = slot.classList.contains('buildingSlotBusy') || slot.classList.contains('in-progress');
-    const timerElem = slot.querySelector('.timer, .construction-timer, .slot-timer, [id*="timer"], [id*="time"]');
+    const hasBuildingGif = styleBg.includes('building.gif') || styleBg.includes('constructing');
+    const hasProgressClass = slot.classList.contains('buildingSlotBusy') || 
+                             slot.classList.contains('in-progress') || 
+                             slot.classList.contains('constructing');
 
-    const isBuilding = hasTimerLock || hasBuildingGif || hasProgressClass || !!timerElem;
+    // Search specifically for game countdown timer elements
+    const timerElem = slot.querySelector('.timer, .construction-timer, .slot-timer, .bld-timer, [id*="timer"], [class*="timer"], [id*="time"]');
+    
+    // Look for formatted time strings (e.g. 00:05:23 or 05:23)
+    let extractedTime = null;
 
-    // Extract remaining time
-    let timeLeft = 'In Progress';
     if (timerElem && timerElem.textContent.trim()) {
-      timeLeft = timerElem.textContent.trim();
+      extractedTime = timerElem.textContent.trim();
     } else {
-      const altTimer = slot.querySelector('div span, p');
-      if (altTimer && /\d{1,2}:\d{2}/.test(altTimer.textContent)) {
-        timeLeft = altTimer.textContent.trim();
+      // Scan all text nodes inside slot for match matching time format
+      const allTexts = Array.from(slot.querySelectorAll('div, span, p')).map(e => e.textContent.trim());
+      for (const txt of allTexts) {
+        const match = txt.match(/\b(?:\d{1,2}:)?\d{2}:\d{2}\b/);
+        if (match) {
+          extractedTime = match[0];
+          break;
+        }
       }
     }
 
+    const isBuilding = hasTimerLock || hasBuildingGif || hasProgressClass || !!extractedTime;
+    const timeLeft = extractedTime || (isBuilding ? 'In Progress' : '');
+
     // Resolve human-readable building name
     let detectedName = isEmpty ? 'Empty Slot' : 'Building';
-    
+
     for (const [key, val] of Object.entries(imageMap)) {
       if (styleBg.includes(key.toLowerCase())) {
         detectedName = val;
@@ -387,7 +433,6 @@ async function performLogin(page) {
   console.log(`[DIAGNOSTIC] Initiating login flow for: ${email}`);
 
   try {
-    // Ensure we are on index.html before clicking login
     if (!page.url().includes('index.html')) {
       await page.goto(CONFIG.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     }
@@ -415,10 +460,8 @@ async function performLogin(page) {
     console.log('[DIAGNOSTIC] Submitting credentials via #pain1...');
     await page.click(submitBtnSelector);
 
-    // Wait 5 seconds for auth response
     await new Promise(resolve => setTimeout(resolve, 5000));
 
-    // Scrape potential inline auth error messages
     const loginErrors = await page.evaluate(() => {
       const errNodes = document.querySelectorAll('.error, .alert, .login-error, #error-message, .modal-body');
       return Array.from(errNodes).map(e => e.textContent.trim()).filter(t => t.length > 0);
@@ -428,25 +471,14 @@ async function performLogin(page) {
       console.warn('[DIAGNOSTIC WARNING] Detected modal messages post-submit:', loginErrors.join(' | '));
     }
 
-    // Capture cookie count
     const cookies = await page.cookies();
     console.log(`[DIAGNOSTIC] Cookies stored post-submit: ${cookies.length}`);
-    cookies.forEach(c => console.log(`   - Cookie: ${c.name} (${c.domain})`));
 
     console.log('[DIAGNOSTIC] Navigating to Great.html (using domcontentloaded)...');
-    
     await page.goto(CONFIG.gameUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await new Promise(resolve => setTimeout(resolve, 5000));
 
     const finalUrl = page.url();
-    const pageTitle = await page.title();
-    const frames = page.frames();
-
-    console.log(`[DIAGNOSTIC RESULT] Final URL: ${finalUrl}`);
-    console.log(`[DIAGNOSTIC RESULT] Page Title: "${pageTitle}"`);
-    console.log(`[DIAGNOSTIC RESULT] Total Active Frames: ${frames.length}`);
-    frames.forEach((f, i) => console.log(`   - Frame [${i}]: ${f.url()}`));
-
     return !finalUrl.includes('index.html');
   } catch (err) {
     console.error('[DIAGNOSTIC ERROR] Login flow failed:', err.stack || err.message);
@@ -463,7 +495,6 @@ async function performLogin(page) {
 async function getGameFrame(page) {
   const currentUrl = page.url();
 
-  // Trigger login if on index.html
   if (currentUrl.includes('index.html')) {
     console.warn(`[BOT RECOVERY] Unauthenticated session detected at ${currentUrl}. Triggering auto-login...`);
     await performLogin(page);
@@ -511,11 +542,11 @@ async function processQueueLoop() {
     const cityOverview = await targetContext.evaluate(scrapeCityStates);
     const slotsData = await targetContext.evaluate(scrapeCitySlots, IMAGE_MAP);
 
-    // Track active city name
+    // Track active city name accurately
     if (cityOverview.length > 0) {
       const currentSelected = cityOverview.find(c => c.isSelected);
-      if (currentSelected) {
-        state.activeCity = currentSelected.cityName || currentSelected.id.replace('City', '');
+      if (currentSelected && currentSelected.cityName) {
+        state.activeCity = currentSelected.cityName;
       }
     }
 
