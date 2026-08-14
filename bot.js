@@ -20,6 +20,7 @@ const state = {
   browser: null,
   page: null,
   isProcessing: false,
+  isLoggingIn: false,
   pendingBuilds: [],
   activeBuilds: [], // Track active upgrades in game slots
   activeCity: 'Main'
@@ -173,7 +174,7 @@ app.get('/', (req, res) => {
       </head>
       <body>
         <div class="container">
-          <div style="display:flex; justify-space-between; align-items:center;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
             <h2>Dragons of Camelot - Control Dashboard</h2>
           </div>
           <div class="nav-links">
@@ -367,92 +368,30 @@ function scrapeCitySlots(imageMap) {
 }
 
 // ==========================================
-// 3. QUEUE LOGIC & POLLING ENGINE
-// ==========================================
-
-async function getGameFrame(page) {
-  const frames = page.frames();
-
-  try {
-    const mainHasBtn = await page.evaluate(() => 
-      !!(document.querySelector('.buildingSlot') || document.querySelector('.city-select'))
-    );
-    if (mainHasBtn) return page;
-  } catch (e) {}
-
-  for (const frame of frames) {
-    try {
-      const frameHasBtn = await frame.evaluate(() => 
-        !!(document.querySelector('.buildingSlot') || document.querySelector('.city-select'))
-      );
-      if (frameHasBtn) {
-        return frame;
-      }
-    } catch (e) {}
-  }
-
-  const currentUrl = page.url();
-  if (currentUrl.includes('index.html')) {
-    console.warn(`[BOT WARNING] Session at login page (${currentUrl}). Re-authentication may be needed.`);
-  }
-  
-  return null;
-}
-
-async function processQueueLoop() {
-  if (state.isProcessing || !state.page) return;
-  state.isProcessing = true;
-
-  try {
-    if (state.page.isClosed()) {
-      throw new Error('Page context closed.');
-    }
-
-    const targetContext = await getGameFrame(state.page);
-
-    if (!targetContext) {
-      return;
-    }
-
-    const cityOverview = await targetContext.evaluate(scrapeCityStates);
-    const slotsData = await targetContext.evaluate(scrapeCitySlots, IMAGE_MAP);
-
-    // Track active city name
-    if (cityOverview.length > 0) {
-      const currentSelected = cityOverview.find(c => c.isSelected);
-      if (currentSelected) {
-        state.activeCity = currentSelected.cityName || currentSelected.id.replace('City', '');
-      }
-    }
-
-    // Update active builds state
-    if (slotsData && slotsData.length > 0) {
-      state.activeBuilds = slotsData.filter(s => s.isBuilding);
-    }
-
-  } catch (err) {
-    console.error('[BOT] Polling error:', err.message);
-  } finally {
-    state.isProcessing = false;
-  }
-}
-
-// ==========================================
-// 4. DIAGNOSTIC AUTHENTICATION ENGINE
+// 3. DIAGNOSTIC AUTHENTICATION ENGINE
 // ==========================================
 
 async function performLogin(page) {
+  if (state.isLoggingIn) return false;
+  state.isLoggingIn = true;
+
   const email = process.env.DOC_EMAIL;
   const password = process.env.DOC_PASSWORD;
 
   if (!email || !password) {
     console.error('[DIAGNOSTIC ERROR] Missing DOC_EMAIL or DOC_PASSWORD env variables!');
+    state.isLoggingIn = false;
     return false;
   }
 
   console.log(`[DIAGNOSTIC] Initiating login flow for: ${email}`);
 
   try {
+    // Ensure we are on index.html before clicking login
+    if (!page.url().includes('index.html')) {
+      await page.goto(CONFIG.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    }
+
     const modalTriggerSelector = 'button[popovertarget="login-modal-wrapper"], button.login-button';
     console.log('[DIAGNOSTIC] Waiting for login button selector...');
     await page.waitForSelector(modalTriggerSelector, { timeout: 15000 });
@@ -494,11 +433,9 @@ async function performLogin(page) {
     console.log(`[DIAGNOSTIC] Cookies stored post-submit: ${cookies.length}`);
     cookies.forEach(c => console.log(`   - Cookie: ${c.name} (${c.domain})`));
 
-    console.log('[DIAGNOSTIC] Navigating to Great.html (using domcontentloaded to prevent stream hangs)...');
+    console.log('[DIAGNOSTIC] Navigating to Great.html (using domcontentloaded)...');
     
-    // Switch to domcontentloaded so websocket/media stream connections don't block navigation
     await page.goto(CONFIG.gameUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-
     await new Promise(resolve => setTimeout(resolve, 5000));
 
     const finalUrl = page.url();
@@ -514,8 +451,89 @@ async function performLogin(page) {
   } catch (err) {
     console.error('[DIAGNOSTIC ERROR] Login flow failed:', err.stack || err.message);
     return false;
+  } finally {
+    state.isLoggingIn = false;
   }
 }
+
+// ==========================================
+// 4. QUEUE LOGIC & POLLING ENGINE
+// ==========================================
+
+async function getGameFrame(page) {
+  const currentUrl = page.url();
+
+  // Trigger login if on index.html
+  if (currentUrl.includes('index.html')) {
+    console.warn(`[BOT RECOVERY] Unauthenticated session detected at ${currentUrl}. Triggering auto-login...`);
+    await performLogin(page);
+    return null;
+  }
+
+  const frames = page.frames();
+
+  try {
+    const mainHasBtn = await page.evaluate(() => 
+      !!(document.querySelector('.buildingSlot') || document.querySelector('.city-select'))
+    );
+    if (mainHasBtn) return page;
+  } catch (e) {}
+
+  for (const frame of frames) {
+    try {
+      const frameHasBtn = await frame.evaluate(() => 
+        !!(document.querySelector('.buildingSlot') || document.querySelector('.city-select'))
+      );
+      if (frameHasBtn) {
+        return frame;
+      }
+    } catch (e) {}
+  }
+
+  return null;
+}
+
+async function processQueueLoop() {
+  if (state.isProcessing || state.isLoggingIn || !state.page) return;
+  state.isProcessing = true;
+
+  try {
+    if (state.page.isClosed()) {
+      throw new Error('Page context closed.');
+    }
+
+    const targetContext = await getGameFrame(state.page);
+
+    if (!targetContext) {
+      return;
+    }
+
+    const cityOverview = await targetContext.evaluate(scrapeCityStates);
+    const slotsData = await targetContext.evaluate(scrapeCitySlots, IMAGE_MAP);
+
+    // Track active city name
+    if (cityOverview.length > 0) {
+      const currentSelected = cityOverview.find(c => c.isSelected);
+      if (currentSelected) {
+        state.activeCity = currentSelected.cityName || currentSelected.id.replace('City', '');
+      }
+    }
+
+    // Update active builds state
+    if (slotsData && slotsData.length > 0) {
+      state.activeBuilds = slotsData.filter(s => s.isBuilding);
+    }
+
+  } catch (err) {
+    console.error('[BOT] Polling error:', err.message);
+  } finally {
+    state.isProcessing = false;
+  }
+}
+
+// ==========================================
+// 5. INITIALIZATION
+// ==========================================
 
 async function initializeBot() {
   console.log('[BOT] Launching headless browser...');
@@ -545,7 +563,7 @@ async function initializeBot() {
 
   const finalUrl = state.page.url();
   if (finalUrl.includes('index.html')) {
-    console.log('[BOT] Session unauthenticated. Performing automated login...');
+    console.log('[BOT] Session unauthenticated. Performing initial automated login...');
     await performLogin(state.page);
   }
 
