@@ -1,3 +1,6 @@
+Here is the complete, integrated script. The helper functions (`parseTimeToSeconds`, `scanResearchOptions`, and `autoUpgradeNextAvailable`) have been placed into section **2**, and the **Execution Engine (Section 3)** and **Polling Loop (Section 5)** have been updated to evaluate and process research tasks automatically.
+
+```javascript
 /**
  * Dragons of Camelot - Headless Bot & Control Panel
  * Target Environment: Node.js (Render Web Service)
@@ -378,7 +381,7 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 // ==========================================
-// 2. OVERLAY DRAWER SCRAPER & UTILS
+// 2. OVERLAY DRAWER SCRAPER, RESEARCH HELPERS & UTILS
 // ==========================================
 
 async function ensureConstructionDrawerOpen(page) {
@@ -464,8 +467,80 @@ function scrapeCategorizedDrawer() {
   return categorized;
 }
 
+// Client-side DOM functions injected during research execution
+function parseTimeToSeconds(timeStr) {
+  if (!timeStr) return 0;
+  const parts = timeStr.split(':').map(Number);
+  
+  if (parts.length === 3) {
+    return parts[0] * 3600 + parts[1] * 60 + parts[2]; // HH:MM:SS
+  } else if (parts.length === 2) {
+    return parts[0] * 60 + parts[1]; // MM:SS
+  }
+  return 0;
+}
+
+function scanResearchOptions() {
+  const researchItems = [];
+
+  // Query all research rows in the container
+  document.querySelectorAll('.researchRow').forEach(row => {
+    const nameEl = row.querySelector('.researchName');
+    const buttonEl = row.querySelector('.researchBtn, button');
+    const badReqs = row.querySelectorAll('.researchRight span.reqOwned.bad');
+    const timeEl = row.querySelector('.researchTime');
+
+    if (!nameEl || !buttonEl) return;
+
+    const name = nameEl.textContent.trim();
+    const buttonId = buttonEl.id ? `#${buttonEl.id}` : null;
+    const isAvailable = badReqs.length === 0 && !buttonEl.disabled;
+    const durationText = timeEl ? timeEl.textContent.trim() : '00:00:00';
+
+    researchItems.push({
+      name,
+      buttonId,
+      buttonElement: buttonEl,
+      canUpgrade: isAvailable,
+      unmetRequirementsCount: badReqs.length,
+      durationSeconds: parseTimeToSeconds(durationText)
+    });
+  });
+
+  return researchItems;
+}
+
+function autoUpgradeNextAvailable(targetName) {
+  const options = scanResearchOptions();
+  
+  // Filter down to items that meet all requirements
+  let readyToUpgrade = options.filter(item => item.canUpgrade);
+
+  if (targetName) {
+    readyToUpgrade = readyToUpgrade.filter(item => item.name.toLowerCase().includes(targetName.toLowerCase()));
+  }
+
+  if (readyToUpgrade.length === 0) {
+    console.log("No research items currently meet requirements.");
+    return false;
+  }
+
+  // Example Strategy: Pick the research with the shortest build time
+  readyToUpgrade.sort((a, b) => a.durationSeconds - b.durationSeconds);
+  
+  const target = readyToUpgrade[0];
+  console.log(`Starting upgrade for: ${target.name} (${target.buttonId})`);
+
+  // Trigger the click
+  if (target.buttonElement) {
+    target.buttonElement.click();
+    return true;
+  }
+  return false;
+}
+
 // ==========================================
-// 3. EXECUTION ENGINE (BUILDINGS)
+// 3. EXECUTION ENGINE (BUILDINGS & RESEARCH)
 // ==========================================
 
 async function executeBuildingUpgrade(frame, task) {
@@ -531,6 +606,33 @@ async function executeBuildingUpgrade(frame, task) {
 
   } catch (err) {
     console.error(`[BUILD ENGINE ERROR] Execution exception:`, err.message);
+    return false;
+  }
+}
+
+async function executeResearchUpgrade(frame, task) {
+  try {
+    console.log(`[RESEARCH ENGINE] Attempting research: ${task.name} in [${task.location}]`);
+
+    const result = await frame.evaluate((targetName, parseTimeFn, scanFn, autoUpgradeFn) => {
+      // Inject function definitions into frame context
+      eval(parseTimeFn);
+      eval(scanFn);
+      eval(autoUpgradeFn);
+
+      return autoUpgradeNextAvailable(targetName);
+    }, task.name, parseTimeToSeconds.toString(), scanResearchOptions.toString(), autoUpgradeNextAvailable.toString());
+
+    if (result) {
+      console.log(`[RESEARCH ENGINE] Successfully triggered research for ${task.name}!`);
+      await new Promise(r => setTimeout(r, 2000));
+      return true;
+    } else {
+      console.warn(`[RESEARCH ENGINE] Research for ${task.name} could not be initiated (unmet requirements or unavailable).`);
+      return false;
+    }
+  } catch (err) {
+    console.error(`[RESEARCH ENGINE ERROR] Execution exception:`, err.message);
     return false;
   }
 }
@@ -627,7 +729,7 @@ async function getGameFrame(page) {
   for (const frame of frames) {
     try {
       const frameHasTarget = await frame.evaluate(() => 
-        !!(document.querySelector('#OpenBar') || document.querySelector('.constructionItem') || document.querySelector('.buildingSlot'))
+        !!(document.querySelector('#OpenBar') || document.querySelector('.constructionItem') || document.querySelector('.buildingSlot') || document.querySelector('.researchRow'))
       );
       if (frameHasTarget) return frame;
     } catch (e) {}
@@ -653,6 +755,7 @@ async function processQueueLoop() {
       state.activeQueues = drawerQueues;
     }
 
+    // --- Process Building Tasks ---
     const nextBuildTaskIndex = state.pendingTasks.findIndex(t => t.type === 'build');
     const isBuildingBusy = state.activeQueues.construction && state.activeQueues.construction.length > 0;
 
@@ -663,6 +766,20 @@ async function processQueueLoop() {
       if (success) {
         state.pendingTasks.splice(nextBuildTaskIndex, 1);
         console.log(`[BOT] Building task executed and cleared:`, task);
+      }
+    }
+
+    // --- Process Research Tasks ---
+    const nextResearchTaskIndex = state.pendingTasks.findIndex(t => t.type === 'research');
+    const isResearchBusy = state.activeQueues.research && state.activeQueues.research.length > 0;
+
+    if (nextResearchTaskIndex !== -1 && !isResearchBusy) {
+      const task = state.pendingTasks[nextResearchTaskIndex];
+      const success = await executeResearchUpgrade(targetContext, task);
+
+      if (success) {
+        state.pendingTasks.splice(nextResearchTaskIndex, 1);
+        console.log(`[BOT] Research task executed and cleared:`, task);
       }
     }
 
@@ -719,3 +836,5 @@ initializeBot().catch((err) => {
   console.error('[BOT] Startup error:', err);
   process.exit(1);
 });
+
+```
