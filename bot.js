@@ -70,6 +70,46 @@ const IMAGE_MAP = {
 const app = express();
 app.use(express.json());
 
+// HTML Snapshot Debugger Endpoint
+app.get('/debug/dom', async (req, res) => {
+  if (!state.page) {
+    return res.status(500).send('Puppeteer page instance not initialized.');
+  }
+
+  try {
+    const url = state.page.url();
+    const title = await state.page.title();
+    const content = await state.page.content();
+    const cookies = await state.page.cookies();
+
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Bot Debugger - DOM Snapshot</title>
+          <style>
+            body { font-family: monospace; background: #121212; color: #e0e0e0; padding: 20px; }
+            pre { background: #1e1e1e; padding: 15px; border-radius: 5px; overflow-x: auto; }
+            textarea { width: 100%; height: 500px; background: #1a1a1a; color: #00ff66; border: 1px solid #333; font-family: monospace; padding: 10px; }
+          </style>
+        </head>
+        <body>
+          <h2>Puppeteer Diagnostics Log</h2>
+          <p><b>Current URL:</b> ${url}</p>
+          <p><b>Title:</b> ${title}</p>
+          <p><b>Stored Cookies Count:</b> ${cookies.length}</p>
+          <h3>Active Cookies:</h3>
+          <pre>${JSON.stringify(cookies, null, 2)}</pre>
+          <h3>Raw DOM Output:</h3>
+          <textarea readonly>${content.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</textarea>
+        </body>
+      </html>
+    `);
+  } catch (err) {
+    res.status(500).send(`Error capturing DOM state: ${err.message}`);
+  }
+});
+
 app.get('/', (req, res) => {
   // Pending queue rows
   const pendingRows = state.pendingBuilds.length === 0
@@ -127,11 +167,18 @@ app.get('/', (req, res) => {
           .badge-active { background: #E65100; color: #FFF; }
           .presets { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
           .preset-btn { width: auto; background: #333; font-size: 0.8em; padding: 6px 12px; }
+          .nav-links { margin-bottom: 15px; font-size: 0.85em; }
+          .nav-links a { color: #64B5F6; text-decoration: none; }
         </style>
       </head>
       <body>
         <div class="container">
-          <h2>Dragons of Camelot - Queue Dashboard</h2>
+          <div style="display:flex; justify-space-between; align-items:center;">
+            <h2>Dragons of Camelot - Control Dashboard</h2>
+          </div>
+          <div class="nav-links">
+            <a href="/debug/dom" target="_blank">🔍 View Raw DOM & Session Diagnostic Inspector</a>
+          </div>
 
           <!-- ACTIVE CONSTRUCTION CARD -->
           <div class="card" style="border-left: 4px solid #FF9800;">
@@ -270,7 +317,7 @@ function scrapeCitySlots(imageMap) {
     const currentLevel = (levelSpan && !isEmpty) ? parseInt(levelSpan.textContent.trim(), 10) : 0;
     const styleBg = (slot.style.backgroundImage || '').toLowerCase();
     
-    // 1. Check for active construction indicators
+    // Check for active construction indicators
     const hasTimerLock = slot.getAttribute('data-timer-lock') === '1';
     const hasBuildingGif = styleBg.includes('building.gif');
     const hasProgressClass = slot.classList.contains('buildingSlotBusy') || slot.classList.contains('in-progress');
@@ -278,7 +325,7 @@ function scrapeCitySlots(imageMap) {
 
     const isBuilding = hasTimerLock || hasBuildingGif || hasProgressClass || !!timerElem;
 
-    // 2. Extract remaining time if timer element exists
+    // Extract remaining time
     let timeLeft = 'In Progress';
     if (timerElem && timerElem.textContent.trim()) {
       timeLeft = timerElem.textContent.trim();
@@ -289,7 +336,7 @@ function scrapeCitySlots(imageMap) {
       }
     }
 
-    // 3. Resolve human-readable building name
+    // Resolve human-readable building name
     let detectedName = isEmpty ? 'Empty Slot' : 'Building';
     
     for (const [key, val] of Object.entries(imageMap)) {
@@ -346,7 +393,7 @@ async function getGameFrame(page) {
 
   const currentUrl = page.url();
   if (currentUrl.includes('index.html')) {
-    console.warn(`[BOT WARNING] Redirected to login page (${currentUrl}). Authentication required.`);
+    console.warn(`[BOT WARNING] Session at login page (${currentUrl}). Re-authentication may be needed.`);
   }
   
   return null;
@@ -391,7 +438,7 @@ async function processQueueLoop() {
 }
 
 // ==========================================
-// 4. AUTOMATED LOGIN & INITIALIZATION
+// 4. DIAGNOSTIC AUTHENTICATION ENGINE
 // ==========================================
 
 async function performLogin(page) {
@@ -399,50 +446,73 @@ async function performLogin(page) {
   const password = process.env.DOC_PASSWORD;
 
   if (!email || !password) {
-    console.error('[BOT ERROR] Missing DOC_EMAIL or DOC_PASSWORD environment variables in Render!');
+    console.error('[DIAGNOSTIC ERROR] Missing DOC_EMAIL or DOC_PASSWORD env variables!');
     return false;
   }
 
-  console.log(`[BOT] Logging into account: ${email}`);
+  console.log(`[DIAGNOSTIC] Initiating login flow for: ${email}`);
 
   try {
     const modalTriggerSelector = 'button[popovertarget="login-modal-wrapper"], button.login-button';
-    await page.waitForSelector(modalTriggerSelector, { timeout: 10000 });
+    console.log('[DIAGNOSTIC] Waiting for login button selector...');
+    await page.waitForSelector(modalTriggerSelector, { timeout: 15000 });
     
-    console.log('[BOT] Opening login modal...');
+    console.log('[DIAGNOSTIC] Clicking login trigger...');
     await page.click(modalTriggerSelector);
 
     const emailSelector = '#login-email';
     const passwordSelector = '#login-password';
     const submitBtnSelector = '#pain1';
 
-    await page.waitForSelector(emailSelector, { visible: true, timeout: 10000 });
+    await page.waitForSelector(emailSelector, { visible: true, timeout: 15000 });
+    console.log('[DIAGNOSTIC] Login modal visible. Filling credentials...');
 
-    // Clear fields and enter credentials
     await page.click(emailSelector, { clickCount: 3 });
-    await page.type(emailSelector, email, { delay: 50 });
+    await page.type(emailSelector, email, { delay: 30 });
 
     await page.click(passwordSelector, { clickCount: 3 });
-    await page.type(passwordSelector, password, { delay: 50 });
+    await page.type(passwordSelector, password, { delay: 30 });
 
-    console.log('[BOT] Submitting credentials (#pain1)...');
+    console.log('[DIAGNOSTIC] Submitting credentials via #pain1...');
     await page.click(submitBtnSelector);
 
-    // Wait 5 seconds for the AJAX request to return account cookies
-    console.log('[BOT] Authenticating session...');
+    // Wait 5 seconds for auth response
     await new Promise(resolve => setTimeout(resolve, 5000));
 
-    // Force navigation to game world carrying account session cookies
-    console.log('[BOT] Loading account world (Great.html)...');
-    await page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 90000 });
+    // Scrape potential inline auth error messages
+    const loginErrors = await page.evaluate(() => {
+      const errNodes = document.querySelectorAll('.error, .alert, .login-error, #error-message, .modal-body');
+      return Array.from(errNodes).map(e => e.textContent.trim()).filter(t => t.length > 0);
+    });
 
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    const currentUrl = page.url();
-    console.log(`[BOT] Account session active on URL: ${currentUrl}`);
+    if (loginErrors.length > 0) {
+      console.warn('[DIAGNOSTIC WARNING] Detected modal messages post-submit:', loginErrors.join(' | '));
+    }
 
-    return !currentUrl.includes('index.html');
+    // Capture cookie count
+    const cookies = await page.cookies();
+    console.log(`[DIAGNOSTIC] Cookies stored post-submit: ${cookies.length}`);
+    cookies.forEach(c => console.log(`   - Cookie: ${c.name} (${c.domain})`));
+
+    console.log('[DIAGNOSTIC] Navigating to Great.html (using domcontentloaded to prevent stream hangs)...');
+    
+    // Switch to domcontentloaded so websocket/media stream connections don't block navigation
+    await page.goto(CONFIG.gameUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+    const finalUrl = page.url();
+    const pageTitle = await page.title();
+    const frames = page.frames();
+
+    console.log(`[DIAGNOSTIC RESULT] Final URL: ${finalUrl}`);
+    console.log(`[DIAGNOSTIC RESULT] Page Title: "${pageTitle}"`);
+    console.log(`[DIAGNOSTIC RESULT] Total Active Frames: ${frames.length}`);
+    frames.forEach((f, i) => console.log(`   - Frame [${i}]: ${f.url()}`));
+
+    return !finalUrl.includes('index.html');
   } catch (err) {
-    console.error('[BOT ERROR] Failed during account login sequence:', err.message);
+    console.error('[DIAGNOSTIC ERROR] Login flow failed:', err.stack || err.message);
     return false;
   }
 }
@@ -468,8 +538,8 @@ async function initializeBot() {
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   );
 
-  console.log('[BOT] Loading game page...');
-  await state.page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 90000 });
+  console.log('[BOT] Loading game entry page...');
+  await state.page.goto(CONFIG.gameUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
 
   await new Promise(resolve => setTimeout(resolve, 3000));
 
