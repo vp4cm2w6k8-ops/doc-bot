@@ -1,4 +1,3 @@
-Here is the complete, integrated script. The helper functions (`parseTimeToSeconds`, `scanResearchOptions`, and `autoUpgradeNextAvailable`) have been placed into section **2**, and the **Execution Engine (Section 3)** and **Polling Loop (Section 5)** have been updated to evaluate and process research tasks automatically.
 
 ```javascript
 /**
