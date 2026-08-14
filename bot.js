@@ -39,7 +39,7 @@ const CITIES = [
 
 const BUILDINGS = [
   'Barracks', 'House', 'Keep', 'Rally Point', 'Dragon Keep',
-  'Sentinel', 'Science', 'Metal', 'Officer', 'Factory',
+  'Sentinel', 'Science Center', 'Metal Mine', 'Officer Quarter', 'Factory',
   'Storehouse', 'Theater', 'Camp', 'Garrison', 'Wall',
   'Portal', 'Mausoleum', 'Spectral Keep', 'Silo',
   'Stone Dragon Keep', 'Lava Dragon Keep'
@@ -221,7 +221,7 @@ app.get('/', (req, res) => {
           </div>
 
           <div class="card" style="border-left: 4px solid #E91E63;">
-            <h3 style="color:#E91E63;">🐉 Dragon Sanctuary & Healing (${state.activeQueues.healing.length})</h3>
+            <h3 style="color:#E91E63;">🐉 Sanctuary & Dragon Healing (${state.activeQueues.healing.length})</h3>
             <table>
               <thead>
                 <tr><th>City / Outpost</th><th>Dragon / Unit</th><th>Details</th><th style="text-align:right;">Time Remaining</th></tr>
@@ -231,7 +231,7 @@ app.get('/', (req, res) => {
           </div>
 
           <div class="card" style="border-left: 4px solid #9C27B0;">
-            <h3 style="color:#9C27B0;">🧪 Alchemy & Research (${state.activeQueues.research.length})</h3>
+            <h3 style="color:#9C27B0;">🧪 Science Center Research (${state.activeQueues.research.length})</h3>
             <table>
               <thead>
                 <tr><th>City / Outpost</th><th>Technology</th><th>Level</th><th style="text-align:right;">Time Remaining</th></tr>
@@ -288,7 +288,7 @@ app.get('/', (req, res) => {
 
             <!-- 3. RESEARCH SCHEDULER -->
             <div class="card" style="border-top: 3px solid #9C27B0;">
-              <h3 style="color:#9C27B0;">🧪 Alchemy & Research</h3>
+              <h3 style="color:#9C27B0;">🧪 Science Center Research</h3>
               <form action="/add" method="GET">
                 <input type="hidden" name="type" value="research">
                 <div style="margin-bottom:10px;">
@@ -336,7 +336,6 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Endpoint to schedule any task type (build, train, research)
 app.get('/add', (req, res) => {
   const type = req.query.type || 'build';
   const location = req.query.location;
@@ -378,7 +377,7 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 // ==========================================
-// 2. OVERLAY DRAWER SCRAPER, RESEARCH HELPERS & UTILS
+// 2. OVERLAY DRAWER SCRAPER & UTILS
 // ==========================================
 
 async function ensureConstructionDrawerOpen(page) {
@@ -388,10 +387,10 @@ async function ensureConstructionDrawerOpen(page) {
     for (const frame of frames) {
       try {
         const opened = await frame.evaluate(() => {
-          const drawerItems = document.querySelectorAll('.constructionItem, .queueItem, .activityItem');
+          const drawerItems = document.querySelectorAll('.constructionItem, .queueItem, .activityItem, tr.queueRow, div[id*="queue"]');
           if (drawerItems.length > 0) return true;
 
-          const openBtn = document.querySelector('#OpenBar, .build-btn');
+          const openBtn = document.querySelector('#OpenBar, .build-btn, #queueBarBtn');
           if (openBtn) {
             openBtn.click();
             return true;
@@ -408,7 +407,7 @@ async function ensureConstructionDrawerOpen(page) {
 }
 
 function scrapeCategorizedDrawer() {
-  const items = document.querySelectorAll('.constructionItem, .queueItem, .activityItem');
+  const items = document.querySelectorAll('.constructionItem, .queueItem, .activityItem, tr.queueRow, div.queue_item');
   
   const categorized = {
     construction: [],
@@ -418,16 +417,16 @@ function scrapeCategorizedDrawer() {
   };
 
   items.forEach((item) => {
-    const nameNode = item.querySelector('.itemName, #itemName, .title');
+    const nameNode = item.querySelector('.itemName, #itemName, .title, .name');
     const name = nameNode ? nameNode.textContent.trim() : 'Unknown Activity';
 
-    const qtyNode = item.querySelector('.itemQuantity, #itemQuantity, .amount');
+    const qtyNode = item.querySelector('.itemQuantity, #itemQuantity, .amount, .level');
     const levelOrQty = qtyNode ? parseInt(qtyNode.textContent.trim(), 10) || 0 : 0;
 
     const locationNode = item.querySelector('.buildTimerLocation, .location');
     const location = locationNode ? locationNode.textContent.trim() : 'Main';
 
-    const timerNode = item.querySelector('#timer, .timer, .timeLeft');
+    const timerNode = item.querySelector('#timer, .timer, .timeLeft, .time');
     let timeLeft = 'In Progress';
 
     if (timerNode) {
@@ -454,7 +453,7 @@ function scrapeCategorizedDrawer() {
       categorized.training.push(queueObj);
     } else if (dataType.includes('heal') || dataType.includes('dragon') || nameLower.includes('dragon') || nameLower.includes('sanctuary') || nameLower.includes('heal')) {
       categorized.healing.push(queueObj);
-    } else if (dataType.includes('research') || dataType.includes('alchemy') || dataType.includes('science') || nameLower.includes('alloy') || nameLower.includes('medicine') || nameLower.includes('levitation')) {
+    } else if (dataType.includes('research') || dataType.includes('science') || nameLower.includes('alloy') || nameLower.includes('medicine') || nameLower.includes('levitation') || nameLower.includes('mining') || nameLower.includes('woodcraft') || nameLower.includes('agriculture') || nameLower.includes('fletching') || nameLower.includes('compass')) {
       categorized.research.push(queueObj);
     } else {
       categorized.construction.push(queueObj);
@@ -464,80 +463,8 @@ function scrapeCategorizedDrawer() {
   return categorized;
 }
 
-// Client-side DOM functions injected during research execution
-function parseTimeToSeconds(timeStr) {
-  if (!timeStr) return 0;
-  const parts = timeStr.split(':').map(Number);
-  
-  if (parts.length === 3) {
-    return parts[0] * 3600 + parts[1] * 60 + parts[2]; // HH:MM:SS
-  } else if (parts.length === 2) {
-    return parts[0] * 60 + parts[1]; // MM:SS
-  }
-  return 0;
-}
-
-function scanResearchOptions() {
-  const researchItems = [];
-
-  // Query all research rows in the container
-  document.querySelectorAll('.researchRow').forEach(row => {
-    const nameEl = row.querySelector('.researchName');
-    const buttonEl = row.querySelector('.researchBtn, button');
-    const badReqs = row.querySelectorAll('.researchRight span.reqOwned.bad');
-    const timeEl = row.querySelector('.researchTime');
-
-    if (!nameEl || !buttonEl) return;
-
-    const name = nameEl.textContent.trim();
-    const buttonId = buttonEl.id ? '#' + buttonEl.id : null;
-    const isAvailable = badReqs.length === 0 && !buttonEl.disabled;
-    const durationText = timeEl ? timeEl.textContent.trim() : '00:00:00';
-
-    researchItems.push({
-      name,
-      buttonId,
-      buttonElement: buttonEl,
-      canUpgrade: isAvailable,
-      unmetRequirementsCount: badReqs.length,
-      durationSeconds: parseTimeToSeconds(durationText)
-    });
-  });
-
-  return researchItems;
-}
-
-function autoUpgradeNextAvailable(targetName) {
-  const options = scanResearchOptions();
-  
-  // Filter down to items that meet all requirements
-  let readyToUpgrade = options.filter(item => item.canUpgrade);
-
-  if (targetName) {
-    readyToUpgrade = readyToUpgrade.filter(item => item.name.toLowerCase().includes(targetName.toLowerCase()));
-  }
-
-  if (readyToUpgrade.length === 0) {
-    console.log("No research items currently meet requirements.");
-    return false;
-  }
-
-  // Pick the research with the shortest build time
-  readyToUpgrade.sort((a, b) => a.durationSeconds - b.durationSeconds);
-  
-  const target = readyToUpgrade[0];
-  console.log('Starting upgrade for: ' + target.name + ' (' + target.buttonId + ')');
-
-  // Trigger the click
-  if (target.buttonElement) {
-    target.buttonElement.click();
-    return true;
-  }
-  return false;
-}
-
 // ==========================================
-// 3. EXECUTION ENGINE (BUILDINGS & RESEARCH)
+// 3. EXECUTION ENGINE (BUILDINGS & SCIENCE CENTER)
 // ==========================================
 
 async function executeBuildingUpgrade(frame, task) {
@@ -545,13 +472,13 @@ async function executeBuildingUpgrade(frame, task) {
     console.log(`[BUILD ENGINE] Attempting upgrade: ${task.name} in [${task.location}] to Lvl ${task.targetLevel}`);
 
     let isMenuOpen = await frame.evaluate(() => {
-      const menu = document.querySelector('#UpgradeMenu');
+      const menu = document.querySelector('#UpgradeMenu, #modal_building, .modalBuilding');
       return menu && window.getComputedStyle(menu).display !== 'none';
     });
 
     if (!isMenuOpen) {
       const clicked = await frame.evaluate((buildingName) => {
-        const slots = Array.from(document.querySelectorAll('.buildingSlot, .building, [data-building-type], div[id*="building"]'));
+        const slots = Array.from(document.querySelectorAll('.buildingSlot, .building, [data-building-type], div[id*="building"], .slot'));
         const target = slots.find(el => el.textContent.toLowerCase().includes(buildingName.toLowerCase()));
         
         if (target) {
@@ -570,18 +497,18 @@ async function executeBuildingUpgrade(frame, task) {
     }
 
     const upgradeResult = await frame.evaluate(() => {
-      const menu = document.querySelector('#UpgradeMenu');
+      const menu = document.querySelector('#UpgradeMenu, #modal_building, .modalBuilding');
       if (!menu || window.getComputedStyle(menu).display === 'none') {
         return { success: false, reason: 'Upgrade menu not visible.' };
       }
 
-      const upgradeBtn = document.querySelector('#upgrade');
+      const upgradeBtn = document.querySelector('#upgrade, .btnUpgrade, button.upgrade');
       if (!upgradeBtn || window.getComputedStyle(upgradeBtn).display === 'none') {
-        return { success: false, reason: 'Upgrade button missing or hidden (Max level or missing requirements).' };
+        return { success: false, reason: 'Upgrade button missing or hidden.' };
       }
 
-      if (upgradeBtn.disabled) {
-        return { success: false, reason: 'Upgrade button is disabled (Insufficient resources or queue busy).' };
+      if (upgradeBtn.disabled || upgradeBtn.classList.contains('disabled')) {
+        return { success: false, reason: 'Upgrade button is disabled.' };
       }
 
       upgradeBtn.click();
@@ -589,13 +516,13 @@ async function executeBuildingUpgrade(frame, task) {
     });
 
     if (upgradeResult.success) {
-      console.log(`[BUILD ENGINE] Successfully clicked #upgrade for ${task.name}!`);
+      console.log(`[BUILD ENGINE] Successfully triggered upgrade for ${task.name}!`);
       await new Promise(r => setTimeout(r, 2000));
       return true;
     } else {
       console.warn(`[BUILD ENGINE] Upgrade failed: ${upgradeResult.reason}`);
       await frame.evaluate(() => {
-        const exitBtn = document.querySelector('#ExitUpgradeMenu');
+        const exitBtn = document.querySelector('#ExitUpgradeMenu, .closeModal, .modalClose');
         if (exitBtn) exitBtn.click();
       });
       return false;
@@ -609,25 +536,79 @@ async function executeBuildingUpgrade(frame, task) {
 
 async function executeResearchUpgrade(frame, task) {
   try {
-    console.log(`[RESEARCH ENGINE] Attempting research: ${task.name} in [${task.location}]`);
+    console.log(`[RESEARCH ENGINE] Opening Science Center for research task: ${task.name}`);
 
-    const result = await frame.evaluate((targetName, parseTimeFn, scanFn, autoUpgradeFn) => {
-      // Inject function definitions into frame context
-      eval(parseTimeFn);
-      eval(scanFn);
-      eval(autoUpgradeFn);
+    // Step 1: Check if Science Center window is already open
+    let isOpen = await frame.evaluate(() => {
+      const scienceModal = document.querySelector('#mod_science, #modal_science, #science_center, .scienceWindow, #modal_building');
+      return scienceModal && window.getComputedStyle(scienceModal).display !== 'none';
+    });
 
-      return autoUpgradeNextAvailable(targetName);
-    }, task.name, parseTimeToSeconds.toString(), scanResearchOptions.toString(), autoUpgradeNextAvailable.toString());
+    if (!isOpen) {
+      console.log('[RESEARCH ENGINE] Finding Science Center on city grid...');
+      const opened = await frame.evaluate(() => {
+        const slots = Array.from(document.querySelectorAll('.buildingSlot, .building, [data-building-type], div[id*="building"], .slot, a, button'));
+        const scienceBuilding = slots.find(el => {
+          const txt = (el.textContent || '').toLowerCase();
+          return txt.includes('science center') || txt.includes('science');
+        });
 
-    if (result) {
-      console.log(`[RESEARCH ENGINE] Successfully triggered research for ${task.name}!`);
+        if (scienceBuilding) {
+          scienceBuilding.click();
+          return true;
+        }
+        return false;
+      });
+
+      if (!opened) {
+        console.warn('[RESEARCH ENGINE] Could not locate Science Center on current city view.');
+        return false;
+      }
+
+      await new Promise(r => setTimeout(r, 2500));
+    }
+
+    // Step 2: Trigger Research technology inside Science Center modal
+    console.log(`[RESEARCH ENGINE] Locating technology: ${task.name}`);
+    const researchResult = await frame.evaluate((techName) => {
+      const rows = Array.from(document.querySelectorAll('.researchRow, .techRow, tr, div[id*="tech"], .techItem, .researchItem'));
+
+      const targetRow = rows.find(r => {
+        const txt = (r.textContent || '').toLowerCase();
+        return txt.includes(techName.toLowerCase());
+      });
+
+      if (!targetRow) {
+        return { success: false, reason: 'Technology not found in Science Center window.' };
+      }
+
+      const researchBtn = targetRow.querySelector('button, .btnResearch, .btnUpgrade, a.button, input[type="button"], #upgrade');
+
+      if (!researchBtn) {
+        return { success: false, reason: 'Research button missing or not visible for this tech.' };
+      }
+
+      if (researchBtn.disabled || researchBtn.classList.contains('disabled')) {
+        return { success: false, reason: 'Research button disabled (Prerequisites missing or queue active).' };
+      }
+
+      researchBtn.click();
+      return { success: true };
+    }, task.name);
+
+    if (researchResult.success) {
+      console.log(`[RESEARCH ENGINE] Successfully started research for ${task.name}!`);
       await new Promise(r => setTimeout(r, 2000));
       return true;
     } else {
-      console.warn(`[RESEARCH ENGINE] Research for ${task.name} could not be initiated (unmet requirements or unavailable).`);
+      console.warn(`[RESEARCH ENGINE] Research trigger failed: ${researchResult.reason}`);
+      await frame.evaluate(() => {
+        const closeBtn = document.querySelector('#mod_science .close, #modal_science .close, .closeModal, .modalClose, #ExitUpgradeMenu');
+        if (closeBtn) closeBtn.click();
+      });
       return false;
     }
+
   } catch (err) {
     console.error(`[RESEARCH ENGINE ERROR] Execution exception:`, err.message);
     return false;
@@ -726,7 +707,7 @@ async function getGameFrame(page) {
   for (const frame of frames) {
     try {
       const frameHasTarget = await frame.evaluate(() => 
-        !!(document.querySelector('#OpenBar') || document.querySelector('.constructionItem') || document.querySelector('.buildingSlot') || document.querySelector('.researchRow'))
+        !!(document.querySelector('#OpenBar') || document.querySelector('.constructionItem') || document.querySelector('.buildingSlot') || document.querySelector('#mod_science') || document.querySelector('#modal_science'))
       );
       if (frameHasTarget) return frame;
     } catch (e) {}
