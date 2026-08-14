@@ -22,7 +22,13 @@ const state = {
   isProcessing: false,
   isLoggingIn: false,
   pendingBuilds: [],
-  activeBuilds: [], // Track active upgrades from the construction panel
+  // Categorized Active Queue State
+  activeQueues: {
+    construction: [],
+    training: [],
+    healing: [],
+    research: []
+  },
   activeCity: 'Main'
 };
 
@@ -100,6 +106,23 @@ app.get('/debug/dom', async (req, res) => {
   }
 });
 
+// Helper renderer for categorized queue tables
+function renderQueueTable(items, emptyLabel, badgeClass = 'badge-active') {
+  if (!items || items.length === 0) {
+    return `<tr><td colspan="4" style="text-align:center; padding:12px; color:#888;">${emptyLabel}</td></tr>`;
+  }
+  return items.map((b) => `
+    <tr style="border-bottom: 1px solid #333;">
+      <td style="padding:10px;"><span class="badge ${badgeClass}">${b.location}</span></td>
+      <td style="padding:10px; font-weight:bold; color:#FFF;">${b.name}</td>
+      <td style="padding:10px;">${b.level ? 'Lvl ' + b.level : (b.quantity ? 'Qty ' + b.quantity : '-')}</td>
+      <td style="padding:10px; text-align:right;">
+        <span style="color:#FFB74D; font-weight:bold; font-family:monospace; font-size:1.05em;">⏱️ ${b.timeLeft}</span>
+      </td>
+    </tr>
+  `).join('');
+}
+
 // Control Dashboard
 app.get('/', (req, res) => {
   const pendingRows = state.pendingBuilds.length === 0
@@ -116,19 +139,6 @@ app.get('/', (req, res) => {
         </tr>
       `).join('');
 
-  const activeRows = state.activeBuilds.length === 0
-    ? `<tr><td colspan="4" style="text-align:center; padding:15px; color:#888;">No active building construction detected</td></tr>`
-    : state.activeBuilds.map((b) => `
-        <tr style="border-bottom: 1px solid #333;">
-          <td style="padding:10px;"><span class="badge badge-active">${b.location}</span></td>
-          <td style="padding:10px; font-weight:bold; color:#FFF;">${b.name}</td>
-          <td style="padding:10px;">Lvl ${b.level}</td>
-          <td style="padding:10px; text-align:right;">
-            <span style="color:#FFB74D; font-weight:bold; font-family:monospace; font-size:1.1em;">⏱️ ${b.timeLeft}</span>
-          </td>
-        </tr>
-      `).join('');
-
   const cityOptions = CITIES.map(c => `<option value="${c}">${c}</option>`).join('');
   const buildingOptions = BUILDINGS.map(b => `<option value="${b}">${b}</option>`).join('');
 
@@ -136,12 +146,12 @@ app.get('/', (req, res) => {
     <!DOCTYPE html>
     <html>
       <head>
-        <title>DoC Build Manager</title>
+        <title>DoC Activity & Build Manager</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta http-equiv="refresh" content="5">
         <style>
           body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #121212; color: #e0e0e0; margin: 0; padding: 20px; }
-          .container { max-width: 800px; margin: 0 auto; }
+          .container { max-width: 900px; margin: 0 auto; }
           .card { background: #1e1e1e; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
           h2, h3 { margin-top: 0; color: #4CAF50; }
           .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 15px; }
@@ -154,6 +164,9 @@ app.get('/', (req, res) => {
           th { padding: 10px; background: #2a2a2a; color: #888; }
           .badge { background: #333; padding: 4px 8px; border-radius: 4px; font-size: 0.85em; color: #64B5F6; }
           .badge-active { background: #E65100; color: #FFF; }
+          .badge-training { background: #2E7D32; color: #FFF; }
+          .badge-healing { background: #C2185B; color: #FFF; }
+          .badge-research { background: #7B1FA2; color: #FFF; }
           .presets { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
           .preset-btn { width: auto; background: #333; font-size: 0.8em; padding: 6px 12px; }
           .nav-links { margin-bottom: 15px; font-size: 0.85em; }
@@ -163,26 +176,51 @@ app.get('/', (req, res) => {
       <body>
         <div class="container">
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <h2>Dragons of Camelot - Control Dashboard</h2>
+            <h2>Dragons of Camelot - Activity Control Dashboard</h2>
           </div>
           <div class="nav-links">
             <a href="/debug/dom" target="_blank">🔍 View Raw DOM Inspector</a>
             <a href="/debug/screenshot" target="_blank">📸 Live Browser Snapshot</a>
           </div>
 
-          <!-- ACTIVE CONSTRUCTION CARD -->
+          <!-- CATEGORIZED ACTIVE QUEUES -->
           <div class="card" style="border-left: 4px solid #FF9800;">
-            <h3 style="color:#FF9800;">🔨 Active Construction (${state.activeBuilds.length})</h3>
+            <h3 style="color:#FF9800;">🔨 Building Upgrades (${state.activeQueues.construction.length})</h3>
             <table>
               <thead>
-                <tr>
-                  <th>Outpost / City</th>
-                  <th>Building</th>
-                  <th>Target Level</th>
-                  <th style="text-align:right;">Time Remaining</th>
-                </tr>
+                <tr><th>City / Outpost</th><th>Building</th><th>Target Level</th><th style="text-align:right;">Time Remaining</th></tr>
               </thead>
-              <tbody>${activeRows}</tbody>
+              <tbody>${renderQueueTable(state.activeQueues.construction, 'No active building upgrades', 'badge-active')}</tbody>
+            </table>
+          </div>
+
+          <div class="card" style="border-left: 4px solid #4CAF50;">
+            <h3 style="color:#4CAF50;">⚔️ Troop Training Queues (${state.activeQueues.training.length})</h3>
+            <table>
+              <thead>
+                <tr><th>City / Outpost</th><th>Troop Type</th><th>Amount</th><th style="text-align:right;">Time Remaining</th></tr>
+              </thead>
+              <tbody>${renderQueueTable(state.activeQueues.training, 'No active troop training queues', 'badge-training')}</tbody>
+            </table>
+          </div>
+
+          <div class="card" style="border-left: 4px solid #E91E63;">
+            <h3 style="color:#E91E63;">🐉 Dragon Sanctuary & Healing (${state.activeQueues.healing.length})</h3>
+            <table>
+              <thead>
+                <tr><th>City / Outpost</th><th>Dragon / Unit</th><th>Details</th><th style="text-align:right;">Time Remaining</th></tr>
+              </thead>
+              <tbody>${renderQueueTable(state.activeQueues.healing, 'No active dragon healing tasks', 'badge-healing')}</tbody>
+            </table>
+          </div>
+
+          <div class="card" style="border-left: 4px solid #9C27B0;">
+            <h3 style="color:#9C27B0;">🧪 Alchemy & Research (${state.activeQueues.research.length})</h3>
+            <table>
+              <thead>
+                <tr><th>City / Outpost</th><th>Technology</th><th>Level</th><th style="text-align:right;">Time Remaining</th></tr>
+              </thead>
+              <tbody>${renderQueueTable(state.activeQueues.research, 'No active research in progress', 'badge-research')}</tbody>
             </table>
           </div>
           
@@ -272,7 +310,7 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 // ==========================================
-// 2. CONSTRUCTION DRAWER SCRAPER
+// 2. CATEGORIZED OVERLAY DRAWER SCRAPER
 // ==========================================
 
 async function ensureConstructionDrawerOpen(page) {
@@ -282,7 +320,7 @@ async function ensureConstructionDrawerOpen(page) {
     for (const frame of frames) {
       try {
         const opened = await frame.evaluate(() => {
-          const drawerItems = document.querySelectorAll('.constructionItem');
+          const drawerItems = document.querySelectorAll('.constructionItem, .queueItem, .activityItem');
           if (drawerItems.length > 0) return true; // Already open
 
           const openBtn = document.querySelector('#OpenBar, .build-btn');
@@ -295,38 +333,44 @@ async function ensureConstructionDrawerOpen(page) {
 
         if (opened) break;
       } catch (e) {
-        // Context handle error on cross-origin frames
+        // Cross-origin frame handling
       }
     }
   } catch (err) {
-    console.warn('[BOT WARNING] Error toggling construction drawer:', err.message);
+    console.warn('[BOT WARNING] Error toggling activity drawer:', err.message);
   }
 }
 
-function scrapeConstructionDrawer() {
-  const items = document.querySelectorAll('.constructionItem');
-  const builds = [];
+function scrapeCategorizedDrawer() {
+  const items = document.querySelectorAll('.constructionItem, .queueItem, .activityItem');
+  
+  const categorized = {
+    construction: [],
+    training: [],
+    healing: [],
+    research: []
+  };
 
   items.forEach((item) => {
-    // 1. Building Name
-    const nameNode = item.querySelector('.itemName, #itemName');
-    const name = nameNode ? nameNode.textContent.trim() : 'Unknown Building';
+    // 1. Name & Type Details
+    const nameNode = item.querySelector('.itemName, #itemName, .title');
+    const name = nameNode ? nameNode.textContent.trim() : 'Unknown Activity';
 
     // 2. Target Level / Quantity
-    const qtyNode = item.querySelector('.itemQuantity, #itemQuantity');
-    const level = qtyNode ? parseInt(qtyNode.textContent.trim(), 10) || 0 : 0;
+    const qtyNode = item.querySelector('.itemQuantity, #itemQuantity, .amount');
+    const levelOrQty = qtyNode ? parseInt(qtyNode.textContent.trim(), 10) || 0 : 0;
 
     // 3. Location Outpost Name
-    const locationNode = item.querySelector('.buildTimerLocation');
+    const locationNode = item.querySelector('.buildTimerLocation, .location');
     const location = locationNode ? locationNode.textContent.trim() : 'Main';
 
     // 4. Time Left
-    const timerNode = item.querySelector('#timer, .timer');
+    const timerNode = item.querySelector('#timer, .timer, .timeLeft');
     let timeLeft = 'In Progress';
 
     if (timerNode) {
       const clonedTimer = timerNode.cloneNode(true);
-      const locSubNode = clonedTimer.querySelector('.buildTimerLocation');
+      const locSubNode = clonedTimer.querySelector('.buildTimerLocation, .location');
       if (locSubNode) {
         locSubNode.remove();
       }
@@ -336,16 +380,33 @@ function scrapeConstructionDrawer() {
       }
     }
 
-    builds.push({
+    // 5. Inspect attributes for Category Classification
+    const speedUpNode = item.querySelector('[data-type], [data-speedup-type], .speedUpIcon');
+    const dataType = speedUpNode ? (speedUpNode.getAttribute('data-type') || speedUpNode.getAttribute('data-speedup-type') || '').toLowerCase() : '';
+    const nameLower = name.toLowerCase();
+
+    const queueObj = {
       name,
-      level,
+      level: levelOrQty,
+      quantity: levelOrQty,
       location,
-      timeLeft,
-      isBuilding: true
-    });
+      timeLeft
+    };
+
+    // Classification Rules
+    if (dataType.includes('train') || dataType.includes('troop') || nameLower.includes('militia') || nameLower.includes('archer') || nameLower.includes('knight') || nameLower.includes('wagon') || nameLower.includes('halberdier') || nameLower.includes('spy')) {
+      categorized.training.push(queueObj);
+    } else if (dataType.includes('heal') || dataType.includes('dragon') || nameLower.includes('dragon') || nameLower.includes('sanctuary') || nameLower.includes('heal')) {
+      categorized.healing.push(queueObj);
+    } else if (dataType.includes('research') || dataType.includes('alchemy') || dataType.includes('science') || nameLower.includes('alloy') || nameLower.includes('medicine') || nameLower.includes('levitation')) {
+      categorized.research.push(queueObj);
+    } else {
+      // Default to construction/building upgrade
+      categorized.construction.push(queueObj);
+    }
   });
 
-  return builds;
+  return categorized;
 }
 
 // ==========================================
@@ -372,7 +433,6 @@ async function performLogin(page) {
       await page.goto(CONFIG.loginUrl, { waitUntil: 'networkidle2', timeout: 30000 });
     }
 
-    // Check if modal trigger is required
     const emailVisible = await page.$('#login-email').then(el => el ? el.isVisible() : false);
     if (!emailVisible) {
       console.log('[DIAGNOSTIC] Opening login modal via trigger click...');
@@ -466,16 +526,14 @@ async function processQueueLoop() {
       return;
     }
 
-    // Ensure construction overlay drawer is open
+    // Ensure side activity drawer is toggled open
     await ensureConstructionDrawerOpen(state.page);
 
-    // Read live construction data from the drawer
-    const drawerBuilds = await targetContext.evaluate(scrapeConstructionDrawer);
+    // Read and categorize active items from drawer
+    const drawerQueues = await targetContext.evaluate(scrapeCategorizedDrawer);
 
-    if (drawerBuilds && drawerBuilds.length > 0) {
-      state.activeBuilds = drawerBuilds;
-    } else {
-      state.activeBuilds = [];
+    if (drawerQueues) {
+      state.activeQueues = drawerQueues;
     }
 
   } catch (err) {
@@ -521,7 +579,7 @@ async function initializeBot() {
     await performLogin(state.page);
   }
 
-  console.log('[BOT] Setup complete. Active construction polling enabled.');
+  console.log('[BOT] Setup complete. Active queue polling enabled.');
   setInterval(processQueueLoop, CONFIG.pollIntervalMs);
 }
 
