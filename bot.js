@@ -1,5 +1,3 @@
-
-```javascript
 /**
  * Dragons of Camelot - Headless Bot & Control Panel
  * Target Environment: Node.js (Render Web Service)
@@ -73,7 +71,7 @@ app.get('/debug/screenshot', async (req, res) => {
     res.set('Content-Type', 'image/png');
     res.send(buffer);
   } catch (err) {
-    res.status(500).send(`Error capturing screenshot: ${err.message}`);
+    res.status(500).send('Error capturing screenshot: ' + err.message);
   }
 });
 
@@ -113,7 +111,7 @@ app.get('/debug/dom', async (req, res) => {
       </html>
     `);
   } catch (err) {
-    res.status(500).send(`Error capturing DOM state: ${err.message}`);
+    res.status(500).send('Error capturing DOM state: ' + err.message);
   }
 });
 
@@ -492,7 +490,7 @@ function scanResearchOptions() {
     if (!nameEl || !buttonEl) return;
 
     const name = nameEl.textContent.trim();
-    const buttonId = buttonEl.id ? `#${buttonEl.id}` : null;
+    const buttonId = buttonEl.id ? '#' + buttonEl.id : null;
     const isAvailable = badReqs.length === 0 && !buttonEl.disabled;
     const durationText = timeEl ? timeEl.textContent.trim() : '00:00:00';
 
@@ -524,11 +522,11 @@ function autoUpgradeNextAvailable(targetName) {
     return false;
   }
 
-  // Example Strategy: Pick the research with the shortest build time
+  // Pick the research with the shortest build time
   readyToUpgrade.sort((a, b) => a.durationSeconds - b.durationSeconds);
   
   const target = readyToUpgrade[0];
-  console.log(`Starting upgrade for: ${target.name} (${target.buttonId})`);
+  console.log('Starting upgrade for: ' + target.name + ' (' + target.buttonId + ')');
 
   // Trigger the click
   if (target.buttonElement) {
@@ -835,5 +833,3 @@ initializeBot().catch((err) => {
   console.error('[BOT] Startup error:', err);
   process.exit(1);
 });
-
-```
