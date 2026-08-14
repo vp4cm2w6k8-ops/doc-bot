@@ -22,11 +22,10 @@ const state = {
   isProcessing: false,
   isLoggingIn: false,
   pendingBuilds: [],
-  activeBuilds: [], // Track active upgrades in game slots
+  activeBuilds: [], // Track active upgrades from the construction panel
   activeCity: 'Main'
 };
 
-// Full list of Cities/Outposts from the .city-select DOM element
 const CITIES = [
   'Main', 'Water', 'Soul', 'Abyssal', 'Chronos', 'Stone', 'Ice',
   'Tempest', 'Skythrone', 'Lava', 'Sunken', 'Steelshard', 'Wind',
@@ -41,37 +40,12 @@ const BUILDINGS = [
   'Stone Dragon Keep', 'Lava Dragon Keep'
 ];
 
-// Map image filenames/keys to human-readable building names
-const IMAGE_MAP = {
-  'barracks': 'Barracks',
-  'house': 'House',
-  'adultdragon': 'Dragon Keep',
-  'adultstonedragon': 'Stone Dragon Keep',
-  'adultlavadragon': 'Lava Dragon Keep',
-  'rally': 'Rally Point',
-  'theater': 'Theater',
-  'mstore': 'Storehouse',
-  'wstore': 'Storehouse',
-  'factory': 'Factory',
-  'sentinel': 'Sentinel',
-  'science': 'Science',
-  'metal': 'Metal',
-  'officer': 'Officer',
-  'portal': 'Portal',
-  'maus': 'Mausoleum',
-  'spec': 'Spectral Keep',
-  'silo': 'Silo',
-  'camp': 'Camp',
-  'waterhouse': 'House'
-};
-
 // ==========================================
 // 1. EXPRESS HTTP SERVER & DASHBOARD
 // ==========================================
 const app = express();
 app.use(express.json());
 
-// HTML Snapshot Debugger Endpoint
 app.get('/debug/dom', async (req, res) => {
   if (!state.page) {
     return res.status(500).send('Puppeteer page instance not initialized.');
@@ -112,7 +86,6 @@ app.get('/debug/dom', async (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  // Pending queue rows
   const pendingRows = state.pendingBuilds.length === 0
     ? `<tr><td colspan="5" style="text-align:center; padding:15px; color:#888;">No pending builds scheduled</td></tr>`
     : state.pendingBuilds.map((b, i) => `
@@ -127,14 +100,13 @@ app.get('/', (req, res) => {
         </tr>
       `).join('');
 
-  // Active in-progress rows
   const activeRows = state.activeBuilds.length === 0
     ? `<tr><td colspan="4" style="text-align:center; padding:15px; color:#888;">No active building construction detected</td></tr>`
     : state.activeBuilds.map((b) => `
         <tr style="border-bottom: 1px solid #333;">
-          <td style="padding:10px;"><span class="badge badge-active">${state.activeCity}</span></td>
+          <td style="padding:10px;"><span class="badge badge-active">${b.location}</span></td>
           <td style="padding:10px; font-weight:bold; color:#FFF;">${b.name}</td>
-          <td style="padding:10px;">Upgrading to Lvl ${b.level > 0 ? b.level + 1 : 'Next'}</td>
+          <td style="padding:10px;">Lvl ${b.level}</td>
           <td style="padding:10px; text-align:right;">
             <span style="color:#FFB74D; font-weight:bold; font-family:monospace; font-size:1.1em;">⏱️ ${b.timeLeft}</span>
           </td>
@@ -187,9 +159,9 @@ app.get('/', (req, res) => {
             <table>
               <thead>
                 <tr>
-                  <th>City / Outpost</th>
+                  <th>Outpost / City</th>
                   <th>Building</th>
-                  <th>Target</th>
+                  <th>Target Level</th>
                   <th style="text-align:right;">Time Remaining</th>
                 </tr>
               </thead>
@@ -283,138 +255,73 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 // ==========================================
-// 2. ENHANCED DOM SCRAPERS
+// 2. CONSTRUCTION DRAWER SCRAPER
 // ==========================================
 
-function scrapeCityStates() {
-  const cities = [];
+async function ensureConstructionDrawerOpen(context) {
+  try {
+    await context.evaluate(() => {
+      const drawerItems = document.querySelectorAll('.constructionItem');
+      if (drawerItems.length > 0) return; // Drawer already visible
 
-  // 1. Try standard empire selection container buttons
-  const container = document.querySelector('.city-select, #city-select, .empire-city-list');
-  if (container) {
-    const buttons = container.querySelectorAll('button, a, div.city-item');
-    buttons.forEach((btn) => {
-      const isSelected = btn.classList.contains('empire-status-selected') || 
-                         btn.classList.contains('selected') || 
-                         btn.classList.contains('active');
-
-      // Extract specific city name (prevent fallback to "Home")
-      let name = btn.getAttribute('data-cityname') || 
-                 btn.getAttribute('title') || 
-                 btn.getAttribute('data-title');
-
-      if (!name) {
-        const rawText = btn.textContent.trim();
-        // Ignore generic labels like "Home" or "City"
-        if (rawText && !['home', 'city', 'cities'].includes(rawText.toLowerCase())) {
-          name = rawText;
-        } else if (btn.id) {
-          name = btn.id.replace(/^city_?|^btn_?/i, '');
-        }
-      }
-
-      if (name) {
-        cities.push({
-          id: btn.id || name,
-          cityName: name,
-          isOwned: true,
-          isSelected: isSelected
-        });
+      const openBtn = document.querySelector('#OpenBar, .build-btn');
+      if (openBtn) {
+        openBtn.click();
       }
     });
+  } catch (e) {
+    console.warn('[BOT WARNING] Error toggling construction drawer:', e.message);
   }
-
-  // 2. Fallback: inspect top header/city title display if dropdown container is unparsed
-  if (cities.length === 0) {
-    const activeHeader = document.querySelector('#currentCityName, .current-city-title, .city-name-display');
-    if (activeHeader && activeHeader.textContent.trim()) {
-      const headerText = activeHeader.textContent.trim();
-      if (!['home', 'city'].includes(headerText.toLowerCase())) {
-        cities.push({
-          id: 'active_header_city',
-          cityName: headerText,
-          isOwned: true,
-          isSelected: true
-        });
-      }
-    }
-  }
-
-  return cities;
 }
 
-function scrapeCitySlots(imageMap) {
-  const slots = document.querySelectorAll('button.buildingSlot, div.buildingSlot, .building-slot');
-  const cityState = [];
+function scrapeConstructionDrawer() {
+  const items = document.querySelectorAll('.constructionItem');
+  const builds = [];
 
-  slots.forEach((slot) => {
-    const levelSpan = slot.querySelector('span, .building-level, .lvl');
-    const isEmpty = slot.classList.contains('emptyBuildingSlot') || slot.classList.contains('empty');
-    const currentLevel = (levelSpan && !isEmpty) ? parseInt(levelSpan.textContent.replace(/\D/g, ''), 10) || 0 : 0;
-    const styleBg = (slot.style.backgroundImage || '').toLowerCase();
+  items.forEach((item) => {
+    // 1. Building Name
+    const nameNode = item.querySelector('.itemName, #itemName');
+    const name = nameNode ? nameNode.textContent.trim() : 'Unknown Building';
 
-    // Check construction flags
-    const hasTimerLock = slot.getAttribute('data-timer-lock') === '1';
-    const hasBuildingGif = styleBg.includes('building.gif') || styleBg.includes('constructing');
-    const hasProgressClass = slot.classList.contains('buildingSlotBusy') || 
-                             slot.classList.contains('in-progress') || 
-                             slot.classList.contains('constructing');
+    // 2. Target Level / Quantity
+    const qtyNode = item.querySelector('.itemQuantity, #itemQuantity');
+    const level = qtyNode ? parseInt(qtyNode.textContent.trim(), 10) || 0 : 0;
 
-    // Search specifically for game countdown timer elements
-    const timerElem = slot.querySelector('.timer, .construction-timer, .slot-timer, .bld-timer, [id*="timer"], [class*="timer"], [id*="time"]');
-    
-    // Look for formatted time strings (e.g. 00:05:23 or 05:23)
-    let extractedTime = null;
+    // 3. Location Outpost Name
+    const locationNode = item.querySelector('.buildTimerLocation');
+    const location = locationNode ? locationNode.textContent.trim() : 'Main';
 
-    if (timerElem && timerElem.textContent.trim()) {
-      extractedTime = timerElem.textContent.trim();
-    } else {
-      // Scan all text nodes inside slot for match matching time format
-      const allTexts = Array.from(slot.querySelectorAll('div, span, p')).map(e => e.textContent.trim());
-      for (const txt of allTexts) {
-        const match = txt.match(/\b(?:\d{1,2}:)?\d{2}:\d{2}\b/);
-        if (match) {
-          extractedTime = match[0];
-          break;
-        }
+    // 4. Time Left
+    const timerNode = item.querySelector('#timer, .timer');
+    let timeLeft = 'In Progress';
+
+    if (timerNode) {
+      // Clone timer node to strip out location text if nested inside
+      const clonedTimer = timerNode.cloneNode(true);
+      const locSubNode = clonedTimer.querySelector('.buildTimerLocation');
+      if (locSubNode) {
+        locSubNode.remove();
+      }
+      const rawText = clonedTimer.textContent.replace('Time Left:', '').trim();
+      if (rawText) {
+        timeLeft = rawText;
       }
     }
 
-    const isBuilding = hasTimerLock || hasBuildingGif || hasProgressClass || !!extractedTime;
-    const timeLeft = extractedTime || (isBuilding ? 'In Progress' : '');
-
-    // Resolve human-readable building name
-    let detectedName = isEmpty ? 'Empty Slot' : 'Building';
-
-    for (const [key, val] of Object.entries(imageMap)) {
-      if (styleBg.includes(key.toLowerCase())) {
-        detectedName = val;
-        break;
-      }
-    }
-
-    if (detectedName === 'Building' || detectedName === 'Under Construction') {
-      const tooltip = slot.getAttribute('title') || slot.getAttribute('data-title') || slot.getAttribute('aria-label');
-      if (tooltip) {
-        detectedName = tooltip.split('-')[0].split('Lvl')[0].trim();
-      }
-    }
-
-    cityState.push({
-      id: slot.id || 'unknown_slot',
-      name: detectedName,
-      level: currentLevel,
-      isEmpty,
-      isBuilding,
-      timeLeft
+    builds.push({
+      name,
+      level,
+      location,
+      timeLeft,
+      isBuilding: true
     });
   });
 
-  return cityState;
+  return builds;
 }
 
 // ==========================================
-// 3. DIAGNOSTIC AUTHENTICATION ENGINE
+// 3. AUTHENTICATION ENGINE
 // ==========================================
 
 async function performLogin(page) {
@@ -462,15 +369,6 @@ async function performLogin(page) {
 
     await new Promise(resolve => setTimeout(resolve, 5000));
 
-    const loginErrors = await page.evaluate(() => {
-      const errNodes = document.querySelectorAll('.error, .alert, .login-error, #error-message, .modal-body');
-      return Array.from(errNodes).map(e => e.textContent.trim()).filter(t => t.length > 0);
-    });
-
-    if (loginErrors.length > 0) {
-      console.warn('[DIAGNOSTIC WARNING] Detected modal messages post-submit:', loginErrors.join(' | '));
-    }
-
     const cookies = await page.cookies();
     console.log(`[DIAGNOSTIC] Cookies stored post-submit: ${cookies.length}`);
 
@@ -504,18 +402,18 @@ async function getGameFrame(page) {
   const frames = page.frames();
 
   try {
-    const mainHasBtn = await page.evaluate(() => 
-      !!(document.querySelector('.buildingSlot') || document.querySelector('.city-select'))
+    const mainHasTarget = await page.evaluate(() => 
+      !!(document.querySelector('#OpenBar') || document.querySelector('.constructionItem') || document.querySelector('.buildingSlot'))
     );
-    if (mainHasBtn) return page;
+    if (mainHasTarget) return page;
   } catch (e) {}
 
   for (const frame of frames) {
     try {
-      const frameHasBtn = await frame.evaluate(() => 
-        !!(document.querySelector('.buildingSlot') || document.querySelector('.city-select'))
+      const frameHasTarget = await frame.evaluate(() => 
+        !!(document.querySelector('#OpenBar') || document.querySelector('.constructionItem') || document.querySelector('.buildingSlot'))
       );
-      if (frameHasBtn) {
+      if (frameHasTarget) {
         return frame;
       }
     } catch (e) {}
@@ -539,20 +437,16 @@ async function processQueueLoop() {
       return;
     }
 
-    const cityOverview = await targetContext.evaluate(scrapeCityStates);
-    const slotsData = await targetContext.evaluate(scrapeCitySlots, IMAGE_MAP);
+    // Ensure side construction panel is open
+    await ensureConstructionDrawerOpen(targetContext);
 
-    // Track active city name accurately
-    if (cityOverview.length > 0) {
-      const currentSelected = cityOverview.find(c => c.isSelected);
-      if (currentSelected && currentSelected.cityName) {
-        state.activeCity = currentSelected.cityName;
-      }
-    }
+    // Read live construction data from the drawer
+    const drawerBuilds = await targetContext.evaluate(scrapeConstructionDrawer);
 
-    // Update active builds state
-    if (slotsData && slotsData.length > 0) {
-      state.activeBuilds = slotsData.filter(s => s.isBuilding);
+    if (drawerBuilds && drawerBuilds.length > 0) {
+      state.activeBuilds = drawerBuilds;
+    } else {
+      state.activeBuilds = [];
     }
 
   } catch (err) {
