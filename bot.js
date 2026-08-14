@@ -465,7 +465,78 @@ function scrapeCategorizedDrawer() {
 }
 
 // ==========================================
-// 3. AUTHENTICATION ENGINE
+// 3. EXECUTION ENGINE (BUILDINGS)
+// ==========================================
+
+async function executeBuildingUpgrade(frame, task) {
+  try {
+    console.log(`[BUILD ENGINE] Attempting upgrade: ${task.name} in [${task.location}] to Lvl ${task.targetLevel}`);
+
+    let isMenuOpen = await frame.evaluate(() => {
+      const menu = document.querySelector('#UpgradeMenu');
+      return menu && window.getComputedStyle(menu).display !== 'none';
+    });
+
+    if (!isMenuOpen) {
+      const clicked = await frame.evaluate((buildingName) => {
+        const slots = Array.from(document.querySelectorAll('.buildingSlot, .building, [data-building-type], div[id*="building"]'));
+        const target = slots.find(el => el.textContent.toLowerCase().includes(buildingName.toLowerCase()));
+        
+        if (target) {
+          target.click();
+          return true;
+        }
+        return false;
+      }, task.name);
+
+      if (!clicked) {
+        console.warn(`[BUILD ENGINE] Could not find building slot for '${task.name}' in DOM.`);
+        return false;
+      }
+
+      await new Promise(r => setTimeout(r, 1500));
+    }
+
+    const upgradeResult = await frame.evaluate(() => {
+      const menu = document.querySelector('#UpgradeMenu');
+      if (!menu || window.getComputedStyle(menu).display === 'none') {
+        return { success: false, reason: 'Upgrade menu not visible.' };
+      }
+
+      const upgradeBtn = document.querySelector('#upgrade');
+      if (!upgradeBtn || window.getComputedStyle(upgradeBtn).display === 'none') {
+        return { success: false, reason: 'Upgrade button missing or hidden (Max level or missing requirements).' };
+      }
+
+      if (upgradeBtn.disabled) {
+        return { success: false, reason: 'Upgrade button is disabled (Insufficient resources or queue busy).' };
+      }
+
+      upgradeBtn.click();
+      return { success: true };
+    });
+
+    if (upgradeResult.success) {
+      console.log(`[BUILD ENGINE] Successfully clicked #upgrade for ${task.name}!`);
+      await new Promise(r => setTimeout(r, 2000));
+      return true;
+    } else {
+      console.warn(`[BUILD ENGINE] Upgrade failed: ${upgradeResult.reason}`);
+      await frame.evaluate(() => {
+        const exitBtn = document.querySelector('#ExitUpgradeMenu');
+        if (exitBtn) exitBtn.click();
+      });
+      return false;
+    }
+
+  } catch (err) {
+    console.error(`[BUILD ENGINE ERROR] Execution exception:`, err.message);
+    return false;
+  }
+}
+
+// ==========================================
+// 4. AUTHENTICATION ENGINE
 // ==========================================
 
 async function performLogin(page) {
@@ -482,46 +553,56 @@ async function performLogin(page) {
   }
 
   try {
+    console.log('[BOT LOGIN] Navigating to login page...');
     if (!page.url().includes('index.html')) {
-      await page.goto(CONFIG.loginUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+      await page.goto(CONFIG.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     }
 
-    const emailVisible = await page.$('#login-email').then(el => el ? el.isVisible() : false);
-    if (!emailVisible) {
-      await page.evaluate(() => {
-        const btn = document.querySelector('button[popovertarget="login-modal-wrapper"], button.login-button, #loginButton');
-        if (btn) btn.click();
-      });
-      await new Promise(r => setTimeout(r, 1500));
-    }
+    await new Promise(r => setTimeout(r, 2000));
+
+    console.log('[BOT LOGIN] Checking for modal trigger...');
+    await page.evaluate(() => {
+      const btn = document.querySelector('button[popovertarget="login-modal-wrapper"], button.login-button, #loginButton');
+      if (btn) btn.click();
+    });
+
+    await new Promise(r => setTimeout(r, 1500));
 
     const emailSelector = '#login-email';
     const passwordSelector = '#login-password';
     const submitBtnSelector = '#pain1';
 
-    await page.waitForSelector(emailSelector, { visible: true, timeout: 15000 });
+    console.log('[BOT LOGIN] Waiting for input fields...');
+    await page.waitForSelector(emailSelector, { visible: true, timeout: 10000 }).catch(() => {
+      console.warn('[BOT LOGIN WARNING] Email selector timeout - attempting direct injection...');
+    });
 
-    await page.click(emailSelector, { clickCount: 3 });
-    await page.type(emailSelector, email, { delay: 40 });
+    await page.evaluate((u, p, eSel, pSel) => {
+      const eInput = document.querySelector(eSel) || document.querySelector('input[type="email"]');
+      const pInput = document.querySelector(pSel) || document.querySelector('input[type="password"]');
+      if (eInput) eInput.value = u;
+      if (pInput) pInput.value = p;
+    }, email, password, emailSelector, passwordSelector);
 
-    await page.click(passwordSelector, { clickCount: 3 });
-    await page.type(passwordSelector, password, { delay: 40 });
+    console.log('[BOT LOGIN] Submitting login credentials...');
+    
+    await page.evaluate((btnSel) => {
+      const btn = document.querySelector(btnSel) || document.querySelector('form button[type="submit"]');
+      if (btn) btn.click();
+    }, submitBtnSelector);
 
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {}),
-      page.click(submitBtnSelector)
-    ]);
+    await new Promise(r => setTimeout(r, 5000));
 
-    await new Promise(r => setTimeout(r, 3000));
-
-    if (!page.url().includes('Great.html')) {
-      await page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 45000 });
-    }
+    console.log('[BOT LOGIN] Navigating directly to game page...');
+    await page.goto(CONFIG.gameUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
 
     const finalUrl = page.url();
-    return finalUrl.includes('Great.html');
+    const isSuccess = finalUrl.includes('Great.html');
+    console.log(`[BOT LOGIN] Result: ${isSuccess ? 'SUCCESS' : 'FAILED'} (Current URL: ${finalUrl})`);
+
+    return isSuccess;
   } catch (err) {
-    console.error('[DIAGNOSTIC ERROR] Login flow failed:', err.stack || err.message);
+    console.error('[DIAGNOSTIC ERROR] Login flow failed:', err.message);
     return false;
   } finally {
     state.isLoggingIn = false;
@@ -529,7 +610,7 @@ async function performLogin(page) {
 }
 
 // ==========================================
-// 4. QUEUE LOGIC & POLLING ENGINE
+// 5. QUEUE LOGIC & POLLING ENGINE
 // ==========================================
 
 async function getGameFrame(page) {
@@ -572,6 +653,19 @@ async function processQueueLoop() {
       state.activeQueues = drawerQueues;
     }
 
+    const nextBuildTaskIndex = state.pendingTasks.findIndex(t => t.type === 'build');
+    const isBuildingBusy = state.activeQueues.construction && state.activeQueues.construction.length > 0;
+
+    if (nextBuildTaskIndex !== -1 && !isBuildingBusy) {
+      const task = state.pendingTasks[nextBuildTaskIndex];
+      const success = await executeBuildingUpgrade(targetContext, task);
+
+      if (success) {
+        state.pendingTasks.splice(nextBuildTaskIndex, 1);
+        console.log(`[BOT] Building task executed and cleared:`, task);
+      }
+    }
+
   } catch (err) {
     console.error('[BOT] Polling error:', err.message);
   } finally {
@@ -580,7 +674,7 @@ async function processQueueLoop() {
 }
 
 // ==========================================
-// 5. INITIALIZATION
+// 6. INITIALIZATION
 // ==========================================
 
 async function initializeBot() {
@@ -594,7 +688,9 @@ async function initializeBot() {
       '--disable-dev-shm-usage',
       '--disable-accelerated-2d-canvas',
       '--disable-gpu',
-      '--disable-web-security'
+      '--disable-web-security',
+      '--disable-features=IsolateOrigins,site-per-process',
+      '--window-size=1280,800'
     ]
   });
 
