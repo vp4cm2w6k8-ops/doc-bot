@@ -46,6 +46,19 @@ const BUILDINGS = [
 const app = express();
 app.use(express.json());
 
+// Visual Screenshot Debugger
+app.get('/debug/screenshot', async (req, res) => {
+  if (!state.page) return res.status(500).send('No active Puppeteer page context.');
+  try {
+    const buffer = await state.page.screenshot({ fullPage: true });
+    res.set('Content-Type', 'image/png');
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).send(`Error capturing screenshot: ${err.message}`);
+  }
+});
+
+// Raw DOM & Session Diagnostic Inspector
 app.get('/debug/dom', async (req, res) => {
   if (!state.page) {
     return res.status(500).send('Puppeteer page instance not initialized.');
@@ -66,6 +79,7 @@ app.get('/debug/dom', async (req, res) => {
             body { font-family: monospace; background: #121212; color: #e0e0e0; padding: 20px; }
             pre { background: #1e1e1e; padding: 15px; border-radius: 5px; overflow-x: auto; }
             textarea { width: 100%; height: 500px; background: #1a1a1a; color: #00ff66; border: 1px solid #333; font-family: monospace; padding: 10px; }
+            a { color: #64B5F6; }
           </style>
         </head>
         <body>
@@ -73,6 +87,7 @@ app.get('/debug/dom', async (req, res) => {
           <p><b>Current URL:</b> ${url}</p>
           <p><b>Title:</b> ${title}</p>
           <p><b>Stored Cookies Count:</b> ${cookies.length}</p>
+          <p><a href="/debug/screenshot" target="_blank">📸 View Live Browser Screenshot</a></p>
           <h3>Active Cookies:</h3>
           <pre>${JSON.stringify(cookies, null, 2)}</pre>
           <h3>Raw DOM Output:</h3>
@@ -85,6 +100,7 @@ app.get('/debug/dom', async (req, res) => {
   }
 });
 
+// Control Dashboard
 app.get('/', (req, res) => {
   const pendingRows = state.pendingBuilds.length === 0
     ? `<tr><td colspan="5" style="text-align:center; padding:15px; color:#888;">No pending builds scheduled</td></tr>`
@@ -141,7 +157,7 @@ app.get('/', (req, res) => {
           .presets { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
           .preset-btn { width: auto; background: #333; font-size: 0.8em; padding: 6px 12px; }
           .nav-links { margin-bottom: 15px; font-size: 0.85em; }
-          .nav-links a { color: #64B5F6; text-decoration: none; }
+          .nav-links a { color: #64B5F6; text-decoration: none; margin-right: 15px; }
         </style>
       </head>
       <body>
@@ -150,7 +166,8 @@ app.get('/', (req, res) => {
             <h2>Dragons of Camelot - Control Dashboard</h2>
           </div>
           <div class="nav-links">
-            <a href="/debug/dom" target="_blank">🔍 View Raw DOM & Session Diagnostic Inspector</a>
+            <a href="/debug/dom" target="_blank">🔍 View Raw DOM Inspector</a>
+            <a href="/debug/screenshot" target="_blank">📸 Live Browser Snapshot</a>
           </div>
 
           <!-- ACTIVE CONSTRUCTION CARD -->
@@ -258,19 +275,31 @@ app.listen(PORT, '0.0.0.0', () => {
 // 2. CONSTRUCTION DRAWER SCRAPER
 // ==========================================
 
-async function ensureConstructionDrawerOpen(context) {
+async function ensureConstructionDrawerOpen(page) {
   try {
-    await context.evaluate(() => {
-      const drawerItems = document.querySelectorAll('.constructionItem');
-      if (drawerItems.length > 0) return; // Drawer already visible
+    const frames = [page, ...page.frames()];
 
-      const openBtn = document.querySelector('#OpenBar, .build-btn');
-      if (openBtn) {
-        openBtn.click();
+    for (const frame of frames) {
+      try {
+        const opened = await frame.evaluate(() => {
+          const drawerItems = document.querySelectorAll('.constructionItem');
+          if (drawerItems.length > 0) return true; // Already open
+
+          const openBtn = document.querySelector('#OpenBar, .build-btn');
+          if (openBtn) {
+            openBtn.click();
+            return true;
+          }
+          return false;
+        });
+
+        if (opened) break;
+      } catch (e) {
+        // Context handle error on cross-origin frames
       }
-    });
-  } catch (e) {
-    console.warn('[BOT WARNING] Error toggling construction drawer:', e.message);
+    }
+  } catch (err) {
+    console.warn('[BOT WARNING] Error toggling construction drawer:', err.message);
   }
 }
 
@@ -296,7 +325,6 @@ function scrapeConstructionDrawer() {
     let timeLeft = 'In Progress';
 
     if (timerNode) {
-      // Clone timer node to strip out location text if nested inside
       const clonedTimer = timerNode.cloneNode(true);
       const locSubNode = clonedTimer.querySelector('.buildTimerLocation');
       if (locSubNode) {
@@ -341,15 +369,19 @@ async function performLogin(page) {
 
   try {
     if (!page.url().includes('index.html')) {
-      await page.goto(CONFIG.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.goto(CONFIG.loginUrl, { waitUntil: 'networkidle2', timeout: 30000 });
     }
 
-    const modalTriggerSelector = 'button[popovertarget="login-modal-wrapper"], button.login-button';
-    console.log('[DIAGNOSTIC] Waiting for login button selector...');
-    await page.waitForSelector(modalTriggerSelector, { timeout: 15000 });
-    
-    console.log('[DIAGNOSTIC] Clicking login trigger...');
-    await page.click(modalTriggerSelector);
+    // Check if modal trigger is required
+    const emailVisible = await page.$('#login-email').then(el => el ? el.isVisible() : false);
+    if (!emailVisible) {
+      console.log('[DIAGNOSTIC] Opening login modal via trigger click...');
+      await page.evaluate(() => {
+        const btn = document.querySelector('button[popovertarget="login-modal-wrapper"], button.login-button, #loginButton');
+        if (btn) btn.click();
+      });
+      await new Promise(r => setTimeout(r, 1500));
+    }
 
     const emailSelector = '#login-email';
     const passwordSelector = '#login-password';
@@ -359,25 +391,29 @@ async function performLogin(page) {
     console.log('[DIAGNOSTIC] Login modal visible. Filling credentials...');
 
     await page.click(emailSelector, { clickCount: 3 });
-    await page.type(emailSelector, email, { delay: 30 });
+    await page.type(emailSelector, email, { delay: 40 });
 
     await page.click(passwordSelector, { clickCount: 3 });
-    await page.type(passwordSelector, password, { delay: 30 });
+    await page.type(passwordSelector, password, { delay: 40 });
 
     console.log('[DIAGNOSTIC] Submitting credentials via #pain1...');
-    await page.click(submitBtnSelector);
+    
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {}),
+      page.click(submitBtnSelector)
+    ]);
 
-    await new Promise(resolve => setTimeout(resolve, 5000));
+    await new Promise(r => setTimeout(r, 3000));
 
-    const cookies = await page.cookies();
-    console.log(`[DIAGNOSTIC] Cookies stored post-submit: ${cookies.length}`);
-
-    console.log('[DIAGNOSTIC] Navigating to Great.html (using domcontentloaded)...');
-    await page.goto(CONFIG.gameUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-    await new Promise(resolve => setTimeout(resolve, 5000));
+    if (!page.url().includes('Great.html')) {
+      console.log('[DIAGNOSTIC] Navigating directly to Great.html...');
+      await page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+    }
 
     const finalUrl = page.url();
-    return !finalUrl.includes('index.html');
+    console.log(`[DIAGNOSTIC] Current URL post-login attempt: ${finalUrl}`);
+
+    return finalUrl.includes('Great.html');
   } catch (err) {
     console.error('[DIAGNOSTIC ERROR] Login flow failed:', err.stack || err.message);
     return false;
@@ -399,14 +435,7 @@ async function getGameFrame(page) {
     return null;
   }
 
-  const frames = page.frames();
-
-  try {
-    const mainHasTarget = await page.evaluate(() => 
-      !!(document.querySelector('#OpenBar') || document.querySelector('.constructionItem') || document.querySelector('.buildingSlot'))
-    );
-    if (mainHasTarget) return page;
-  } catch (e) {}
+  const frames = [page, ...page.frames()];
 
   for (const frame of frames) {
     try {
@@ -437,8 +466,8 @@ async function processQueueLoop() {
       return;
     }
 
-    // Ensure side construction panel is open
-    await ensureConstructionDrawerOpen(targetContext);
+    // Ensure construction overlay drawer is open
+    await ensureConstructionDrawerOpen(state.page);
 
     // Read live construction data from the drawer
     const drawerBuilds = await targetContext.evaluate(scrapeConstructionDrawer);
@@ -482,7 +511,7 @@ async function initializeBot() {
   );
 
   console.log('[BOT] Loading game entry page...');
-  await state.page.goto(CONFIG.gameUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  await state.page.goto(CONFIG.gameUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
   await new Promise(resolve => setTimeout(resolve, 3000));
 
